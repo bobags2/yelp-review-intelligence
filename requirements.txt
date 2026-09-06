@@ -1,0 +1,29 @@
+# Java 17+ required for Spark 4.x -- check with `java -version`
+
+# --- data + batch ---
+pyspark>=4.0.0
+pyarrow>=18.0.0          # Arrow path for toPandas(); Spark falls back silently without it
+pandas>=2.0
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.4
+xgboost>=2.1             # 2.1+ for the device="cuda" API
+
+# --- encoder training (GPU) ---
+# Install torch first, from the CUDA 12.1 index, or pip gives you the CPU build:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.4
+transformers>=4.44
+
+# --- export + serving ---
+onnx>=1.16
+onnxruntime>=1.19        # swap for onnxruntime-gpu to use CUDAExecutionProvider
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+
+# --- streaming ---
+confluent-kafka>=2.5
+
+# --- cloud (optional) ---
+boto3>=1.34

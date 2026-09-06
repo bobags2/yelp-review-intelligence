@@ -1,0 +1,9 @@
+data/
+# Everything in artifacts/ is generated. The previous artifacts/*.json and
+# artifacts/*.csv patterns matched only direct children, so artifacts/encoder/
+# (~174MB of model weights) was not covered.
+artifacts/*
+!artifacts/.gitkeep
+__pycache__/
+*.pyc
+.venv/
