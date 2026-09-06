@@ -113,7 +113,17 @@ These are load-bearing decisions, each with a comment at its site explaining why
   | linear / tf-idf chi2-20k | 0.5760 | 0.5951 |
   | DistilBERT, 2 epochs | **0.6335** | — |
 
-  +0.0575 over the linear model. The defensible claim is narrow: *a pretrained contextual model clears the lexical ceiling by 5.7 points; the sweep shows the margin is not term-identity signal, but does not identify what it is.* The fine-tuned model differs from TF-IDF on three axes at once — subword tokenisation with no OOV, word order, and pretraining — so attributing the margin to "context" picks one and asserts it. The likeliest alternative is transfer: DistilBERT knows `hygienist` relates to dentistry before it sees a Yelp review, which is a better prior on rare terms than 20k TF-IDF weights can estimate from 400k rows. `--random-init` (same architecture, same tokeniser, no pretrained weights) is the discriminator; a second probe is shuffling word order at eval time, which would rule out the negation-and-syntax story specifically.
+  +0.0575 over the linear model, and the `--random-init` control decomposes it. Same architecture, same tokeniser, no pretrained weights:
+
+  | | macro AP | Δ | share |
+  |---|---|---|---|
+  | linear / tf-idf chi2-20k (lexical ceiling) | 0.5760 | — | — |
+  | DistilBERT, random init | 0.5903 | +0.0143 | architecture, 25% |
+  | DistilBERT, pretrained | 0.6335 | +0.0432 | transfer, 75% |
+
+  Three quarters of the margin is transfer — DistilBERT knowing `hygienist` relates to dentistry before it sees a Yelp review, a better prior on rare terms than 20k TF-IDF weights can estimate from 400k rows. The remaining quarter is the architecture itself: random init still clears the lexical ceiling, so subword tokenisation and word order buy something real.
+
+  **The 75% is an upper bound on transfer.** At a fixed two-epoch budget, "transfer" conflates a higher ceiling with faster convergence, and the random-init arm is visibly further from converged: it gained 0.0225 macro AP in its second epoch against the pretrained model's 0.0092, at a higher loss (0.4475 vs 0.3908). Training the control to convergence is what would separate the two.
 
   Read 0.6335 as a **lower bound**: loss was still falling at the last step and peak VRAM was 2.65GB of 8GB. And always compare on matched test rows — `train_encoder` caps eval at `eval_rows=60000` while `train_baseline` defaults `--test-rows` to the full split.
 
