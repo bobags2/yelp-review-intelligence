@@ -46,6 +46,13 @@ SPARK_MASTER = os.environ.get("SPARK_MASTER", "local[*]")
 SPARK_SHUFFLE_PARTITIONS = int(os.environ.get("SPARK_SHUFFLE_PARTITIONS", "96"))
 SPARK_LOCAL_DIR = os.environ.get("SPARK_LOCAL_DIR", str(DATA_ROOT / "spark-tmp"))
 
+# Spark caps collected results at 1g by default, independently of driver.memory.
+# train_baseline pulls BASELINE_SAMPLE_ROWS rows *including review text* through
+# toPandas(), which is ~1.04 GB at the default 400k on the real dataset -- so the
+# stock cap aborts the job on a driver with 24g of heap sitting idle. Only shows
+# up on real data; the synthetic smoke sample is far too small to reach it.
+SPARK_MAX_RESULT_SIZE = os.environ.get("SPARK_MAX_RESULT_SIZE", "4g")
+
 
 def get_spark(app_name: str) -> SparkSession:
     """Build a SparkSession tuned for a single fat local machine.
@@ -58,6 +65,7 @@ def get_spark(app_name: str) -> SparkSession:
         SparkSession.builder.appName(app_name)
         .master(SPARK_MASTER)
         .config("spark.driver.memory", SPARK_DRIVER_MEMORY)
+        .config("spark.driver.maxResultSize", SPARK_MAX_RESULT_SIZE)
         .config("spark.local.dir", SPARK_LOCAL_DIR)
         .config("spark.sql.shuffle.partitions", SPARK_SHUFFLE_PARTITIONS)
         # Adaptive execution collapses the 96 shuffle partitions back down when
