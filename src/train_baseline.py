@@ -143,6 +143,34 @@ def print_report(name: str, m: dict, top_n: int = 12) -> None:
 # --------------------------------------------------------------------------
 
 
+def chi2_scores_multilabel(X, Y) -> np.ndarray:
+    """Per-label chi2, aggregated by max over labels.
+
+    Max, not sum or mean: a term that is decisive for one rare category
+    ("hygienist") is worth keeping even if it says nothing about the other
+    forty-nine. Summing would instead favour broadly informative terms and
+    select a visibly different vocabulary at small k.
+
+    Collapsing the label matrix to a single target does not work: features.py
+    drops businesses matching no top-K category, so every row carries at least
+    one label and the collapsed target is the constant 1, against which chi2
+    scores every feature identically.
+    """
+    from sklearn.feature_selection import chi2
+
+    best = np.zeros(X.shape[1], dtype=np.float64)
+    for j in range(Y.shape[1]):
+        col = Y[:, j]
+        pos = int(col.sum())
+        if pos == 0 or pos == len(col):
+            continue
+        sc, _ = chi2(X, col)
+        best = np.maximum(best, np.nan_to_num(sc, nan=0.0, posinf=0.0))
+    if not np.any(best > 0):
+        raise SystemExit("chi2 produced no positive scores; the target is degenerate")
+    return best
+
+
 def fit_linear(Xtr, ytr, Xte):
     n_labels = ytr.shape[1]
     scores = np.zeros((Xte.shape[0], n_labels), dtype=np.float32)
@@ -226,6 +254,12 @@ def main() -> None:
                    help="lr-svd is the ablation: linear model on the xgb feature matrix")
     p.add_argument("--max-features", type=int, default=200_000)
     p.add_argument("--svd-dims", type=int, default=256)
+    p.add_argument("--select-k", type=int, default=20_000,
+                   help="chi2-select this many features for the sparse arm (0 = all). "
+                        "The sweep plateaus by ~5k and peaks near 20k.")
+    p.add_argument("--drop-metadata", action="store_true",
+                   help="omit the 10 numeric columns from the dense arms, so a "
+                        "256-dim comparison against chi2-256 is width-matched")
     p.add_argument("--train-rows", type=int, default=BASELINE_SAMPLE_ROWS)
     p.add_argument("--test-rows", type=int, default=None)
     args = p.parse_args()
@@ -255,11 +289,26 @@ def main() -> None:
     Xte_txt = tfidf.transform(te_text)
     print(f"[baseline] tfidf {Xtr_txt.shape[1]:,} features in {time.time() - t0:.1f}s")
 
+    # chi2 selection for the sparse arm. The vocabulary sweep shows the curve
+    # plateaus by ~5k features and peaks near 20k -- the full 200k scores
+    # slightly *below* a selected 20k subset and takes four times as long to
+    # fit. Note this is selection from a wide vectorisation, which is not the
+    # same as TfidfVectorizer(max_features=20000): that keeps the most
+    # *frequent* terms, a different and unmeasured subset.
+    Xtr_lin, Xte_lin = Xtr_txt, Xte_txt
+    if args.select_k and args.select_k < Xtr_txt.shape[1]:
+        t0 = time.time()
+        keep = np.argsort(chi2_scores_multilabel(Xtr_txt, ytr))[::-1][:args.select_k]
+        keep.sort()
+        Xtr_lin, Xte_lin = Xtr_txt[:, keep], Xte_txt[:, keep]
+        print(f"[baseline] chi2 selected {args.select_k:,} of "
+              f"{Xtr_txt.shape[1]:,} features in {time.time() - t0:.1f}s")
+
     results = {}
 
     if args.model in ("linear", "both"):
         t0 = time.time()
-        s = fit_linear(Xtr_txt, ytr, Xte_txt)
+        s = fit_linear(Xtr_lin, ytr, Xte_lin)
         results["linear_tfidf"] = evaluate(yte, s, vocab)
         results["linear_tfidf"]["fit_seconds"] = time.time() - t0
         print_report("linear / tf-idf", results["linear_tfidf"])
@@ -268,8 +317,14 @@ def main() -> None:
         t0 = time.time()
         dims = min(args.svd_dims, min(Xtr_txt.shape) - 1)
         svd = TruncatedSVD(n_components=dims, random_state=RANDOM_SEED)
-        Xtr = np.hstack([svd.fit_transform(Xtr_txt).astype(np.float32), tr_num])
-        Xte = np.hstack([svd.transform(Xte_txt).astype(np.float32), te_num])
+        # Deliberately the full TF-IDF matrix, not the chi2-selected one: a
+        # projection of the whole vocabulary is what defines this arm, and it
+        # keeps the basis the lr-svd/xgb decomposition was measured on.
+        Xtr = svd.fit_transform(Xtr_txt).astype(np.float32)
+        Xte = svd.transform(Xte_txt).astype(np.float32)
+        if not args.drop_metadata:
+            Xtr = np.hstack([Xtr, tr_num])
+            Xte = np.hstack([Xte, te_num])
         # A low ratio here is a property of TF-IDF, which is near full rank, not
         # a defect to be fixed by adding components. Recovering most of the
         # variance would take thousands of them, at which point the reduction
@@ -289,9 +344,11 @@ def main() -> None:
     if args.model in ("lr-svd", "all"):
         t0 = time.time()
         s = fit_linear_dense(Xtr, ytr, Xte)
-        results["linear_svd_meta"] = evaluate(yte, s, vocab)
-        results["linear_svd_meta"]["fit_seconds"] = time.time() - t0 + svd_seconds
-        print_report("linear / svd + metadata (ablation)", results["linear_svd_meta"])
+        key = "linear_svd_only" if args.drop_metadata else "linear_svd_meta"
+        results[key] = evaluate(yte, s, vocab)
+        results[key]["fit_seconds"] = time.time() - t0 + svd_seconds
+        print_report(f"linear / svd{'' if args.drop_metadata else ' + metadata'} "
+                     f"(ablation)", results[key])
 
     # Merge rather than overwrite: running one model at a time (an ablation,
     # say) must not discard results already recorded for the others.

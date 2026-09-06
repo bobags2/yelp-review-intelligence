@@ -37,43 +37,18 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.feature_selection import chi2
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ARTIFACTS_DIR, BASELINE_SAMPLE_ROWS, get_spark  # noqa: E402
-from src.train_baseline import evaluate, fit_linear, load_split  # noqa: E402
+from src.train_baseline import (  # noqa: E402
+    chi2_scores_multilabel,
+    evaluate,
+    fit_linear,
+    load_split,
+)
 
 DEFAULT_SIZES = [256, 1_000, 5_000, 20_000, 100_000, 200_000]
-
-
-def chi2_scores_multilabel(X, Y) -> np.ndarray:
-    """Per-label chi2, aggregated by max over labels.
-
-    Collapsing the label matrix to a single target does not work here:
-    features.py drops businesses matching no top-K category, so every training
-    row carries at least one label and a collapsed target is the constant 1.
-    chi2 against a constant target is degenerate -- every feature scores the
-    same, and SelectKBest then returns whatever argsort order gives, which is
-    alphabetical vocabulary order rather than a selection. Scoring each label
-    separately and keeping each feature's best score is the standard filter for
-    the multi-label case: a term that identifies one category strongly is worth
-    keeping even if it says nothing about the other forty-nine.
-    """
-    best = np.zeros(X.shape[1], dtype=np.float64)
-    for j in range(Y.shape[1]):
-        col = Y[:, j]
-        pos = int(col.sum())
-        if pos == 0 or pos == len(col):
-            continue
-        sc, _ = chi2(X, col)
-        best = np.maximum(best, np.nan_to_num(sc, nan=0.0, posinf=0.0))
-    if not np.any(best > 0):
-        raise SystemExit(
-            "chi2 produced no positive scores -- the target is degenerate; "
-            "selection would be arbitrary and the sweep meaningless"
-        )
-    return best
 
 
 def main() -> None:
