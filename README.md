@@ -203,11 +203,39 @@ true end-to-end latency (produce → scored), not just its own processing time.
 Events are keyed by `business_id`, so all reviews for a business land on one
 partition and any per-business aggregation downstream needs no shuffle.
 
-The consumer micro-batches: scoring 32 reviews in one ONNX call is roughly 10x
-cheaper per review than 32 separate calls, because fixed per-call overhead
-dominates at these sizes. `--batch-size` and `--max-wait-ms` make the
-latency/throughput trade explicit. Run `make bench` first and use the suggested
-knee rather than guessing 32 because 32 is a nice number.
+The consumer micro-batches, and the right size is a trade between two cost
+curves that run in opposite directions — measured, not assumed.
+
+The **model** gets worse per review as the batch grows, because batches pad to
+their longest member and review text is ragged. The **pipeline** gets better,
+because an offset commit and an out-topic produce are paid once per batch
+regardless of size. On the DistilBERT graph over CPU EP:
+
+| batch | score/review | end-to-end throughput |
+|---|---|---|
+| 2 | 31.2 ms | 4.8 reviews/s |
+| 8 | 44.8 ms | **11.4 reviews/s** |
+| 32 | 65.8 ms | 10.4 reviews/s |
+
+The sum minimises near batch 8, which is the default.
+
+Two earlier claims here were wrong, and the way they were wrong is the
+interesting part. The first was that batching 32 is "roughly 10x cheaper per
+review than 32 separate calls, because fixed per-call overhead dominates" —
+true when per-call overhead *does* dominate, and false here, where ONNX Runtime
+already parallelises one inference across 8 threads and padding waste grows
+with batch size. `make bench` measures that and refutes it.
+
+The second was the correction: taking `make bench` at its word and dropping the
+default to 2. But the bench times `Scorer.score()` in isolation, so it sees only
+the model's curve. At batch 2 the per-batch commit and produce are paid 16x more
+often, and end-to-end throughput falls to 4.8/s — less than half. A correct
+measurement, applied outside the scope it measured.
+
+Note the absolute numbers: ~11 reviews/s for DistilBERT on CPU EP. An earlier
+figure of 140/s in this repo was measured against a MiniLM graph trained on
+synthetic data, not the model you would ship. Serving a transformer on CPU is
+expensive, and that cost belongs beside the +0.057 macro AP it buys.
 
 Offsets are committed **after** scoring, never auto-committed. Auto-commit
 acknowledges messages that were read but not yet scored, so a crash mid-batch

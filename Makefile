@@ -78,7 +78,7 @@ produce:
 	$(PY) -m stream.producer --rate 500 --limit 50000
 
 consume:
-	$(PY) -m stream.consumer --batch-size 32 --max-wait-ms 50 --from-beginning
+	$(PY) -m stream.consumer --batch-size 8 --max-wait-ms 50 --from-beginning
 
 # ---- cloud ----------------------------------------------------------------
 s3:

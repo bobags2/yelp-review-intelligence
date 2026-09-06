@@ -131,10 +131,17 @@ def main() -> None:
         else:
             break
 
-    print(f"\n[bench] suggested consumer --batch-size {knee}")
+    print(f"\n[bench] model-only optimum: --batch-size {knee}")
     print(f"[bench] at that size, a review waits up to "
           f"{[r for r in rows if r['batch_size'] == knee][0]['batch_p95_ms']:.1f} ms "
           f"(p95) for its batch to complete, plus the fill wait set by --max-wait-ms")
+    print("[bench] NOTE: this times Scorer.score() alone, so it sees only one of the")
+    print("[bench] two curves. The consumer also pays an offset commit and an out-topic")
+    print("[bench] produce once per *batch*, a fixed cost that falls per review as the")
+    print("[bench] batch grows -- the opposite direction to the curve above. The system")
+    print("[bench] optimum is set by their sum and is larger than this number: taking")
+    print("[bench] it directly gave batch 2 and less than half the achievable")
+    print("[bench] throughput. Measure the consumer end to end before setting it.")
 
     out = Path(__file__).resolve().parents[1] / "artifacts" / "latency_bench.json"
     out.write_text(json.dumps({"provider": scorer.provider, "suggested_batch_size": knee,

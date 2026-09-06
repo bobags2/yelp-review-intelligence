@@ -5,12 +5,26 @@ serialisation and a round trip to a model that takes single-digit milliseconds,
 so the network would be most of the measured latency and the numbers would tell
 you about your loopback interface instead of your model.
 
-Micro-batching is the whole trick. Scoring 32 reviews in one ONNX call is
-roughly 10x cheaper per review than 32 separate calls, because the fixed
-per-call overhead dominates at these sizes. So the consumer accumulates until
-either the batch is full or a deadline expires -- the same latency/throughput
-trade every streaming inference system makes, made explicit here with
---batch-size and --max-wait-ms.
+Micro-batching is a trade between two cost curves that run in opposite
+directions, and the system optimum belongs to neither of them alone.
+
+The model gets *worse* per review as the batch grows, because batches pad to
+their longest member and review text is ragged: measured on the DistilBERT
+graph over CPU EP, 31.2 ms/review at batch 2, 44.8 at batch 8, 65.8 at batch
+32. The pipeline gets *better*, because an offset commit and an out-topic
+produce are paid once per batch regardless of its size.
+
+End-to-end, the sum minimises around batch 8:
+
+    batch  2   ->   4.8 reviews/s
+    batch  8   ->  11.4 reviews/s
+    batch 32   ->  10.4 reviews/s
+
+Note what this means for `scripts/bench_latency.py`: it times Scorer.score()
+in isolation and so sees only the first curve. Its suggestion is the model's
+optimum, not the consumer's, and taking it directly gives batch 2 -- less than
+half the achievable throughput. Measure the consumer end to end before setting
+this default.
 
 Reported at the end:
     e2e latency   produce -> scored, the number a downstream consumer feels
@@ -18,7 +32,7 @@ Reported at the end:
     lag           messages behind the head of the partition
 
 Usage:
-    python -m stream.consumer --batch-size 32 --max-wait-ms 50
+    python -m stream.consumer --batch-size 8 --max-wait-ms 50
 """
 
 from __future__ import annotations
@@ -85,7 +99,9 @@ def main() -> None:
     p.add_argument("--in-topic", default=IN_TOPIC)
     p.add_argument("--out-topic", default=OUT_TOPIC)
     p.add_argument("--group", default="yelp-cci-scorer")
-    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--batch-size", type=int, default=8,
+                   help="measured end-to-end optimum; the model prefers smaller "
+                        "and the commit/produce overhead prefers larger")
     p.add_argument("--max-wait-ms", type=int, default=50)
     p.add_argument("--top-k", type=int, default=3)
     p.add_argument("--max-events", type=int, default=0, help="0 = run until interrupted")
