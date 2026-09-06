@@ -39,7 +39,12 @@ import torch.nn as nn
 from pyspark.sql import functions as F
 from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import (
+    AutoConfig,
+    AutoModel,
+    AutoTokenizer,
+    get_linear_schedule_with_warmup,
+)
 
 from src.config import ARTIFACTS_DIR, FEATURES_DIR, RANDOM_SEED, get_spark
 
@@ -58,6 +63,7 @@ class TrainConfig:
     train_rows: int = 400_000
     eval_rows: int = 60_000
     amp: bool = True
+    random_init: bool = False
     seed: int = RANDOM_SEED
 
 
@@ -124,9 +130,22 @@ class MultiLabelEncoder(nn.Module):
     meaning something, and mean pooling converges faster on small budgets.
     """
 
-    def __init__(self, model_name: str, n_labels: int, dropout: float = 0.1):
+    def __init__(self, model_name: str, n_labels: int, dropout: float = 0.1,
+                 random_init: bool = False):
         super().__init__()
-        self.encoder = AutoModel.from_pretrained(model_name)
+        if random_init:
+            # The control for the gate. The fine-tuned model differs from the
+            # TF-IDF baseline on three axes at once -- subword tokenisation with
+            # no OOV, word order, and pretraining -- so a win cannot attribute
+            # itself to any one of them. Same architecture, same tokeniser, same
+            # head, no pretrained weights: if this lands near the lexical
+            # ceiling the margin was transfer, i.e. a better prior on rare terms
+            # than 20k TF-IDF weights can estimate. If it clears the ceiling on
+            # its own, the architecture is extracting something bag-of-words
+            # cannot represent.
+            self.encoder = AutoModel.from_config(AutoConfig.from_pretrained(model_name))
+        else:
+            self.encoder = AutoModel.from_pretrained(model_name)
         hidden = self.encoder.config.hidden_size
         self.dropout = nn.Dropout(dropout)
         self.head = nn.Linear(hidden, n_labels)
@@ -222,7 +241,7 @@ def main() -> None:
         num_workers=2, pin_memory=(device.type == "cuda"),
     )
 
-    model = MultiLabelEncoder(cfg.model_name, len(vocab)).to(device)
+    model = MultiLabelEncoder(cfg.model_name, len(vocab), random_init=cfg.random_init).to(device)
 
     # Rare labels get up-weighted, but the weight is capped. Uncapped
     # pos_weight on a label at 0.2% prevalence is 500x, which makes the loss

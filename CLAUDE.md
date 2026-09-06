@@ -103,15 +103,21 @@ These are load-bearing decisions, each with a comment at its site explaining why
   What the curve licenses: the *lexical* ceiling is ~0.576 and a few thousand terms carry the task, which is a weak prior for a contextual model. It does **not** bound what a transformer can reach — signal orthogonal to term identity (negation, which category of a multi-category business a review is about) is untested by it.
 
   At equal width, 256 LSA components (0.4280, metadata dropped) beat 256 chi2-selected terms (0.3909). That is a single point, not a curve: it says the projection outperformed selection *at 256 dimensions*, and does not establish that LSA's compression is lossy only in degree. Testing that would need LSA at 5k components, which is impractical here — randomized SVD would want a 200k×5k basis and a 400k×5k dense output, ~24GB in float64 against a 32GB cap.
-- **The transformer gate cleared, and the lexical prior was wrong.** DistilBERT, 2 epochs, stock defaults, evaluated on the same 60,040-row test sample:
+- **The transformer gate cleared; what carries the margin is not yet identified.** DistilBERT, 2 epochs, stock defaults, everything below on the same 60,040 test rows:
 
-  | model | macro AP | test rows |
+  | arm | macro AP | micro AP |
   |---|---|---|
-  | linear / chi2-20k | 0.5762 | 1,280,392 |
-  | linear / chi2-20k | 0.5760 | 60,040 |
-  | DistilBERT, 2 epochs | **0.6335** | 60,040 |
+  | xgb / svd + metadata | 0.4210 | 0.4485 |
+  | linear / svd + metadata | 0.4308 | 0.4944 |
+  | linear / svd, no metadata | 0.4299 | 0.4937 |
+  | linear / tf-idf chi2-20k | 0.5760 | 0.5951 |
+  | DistilBERT, 2 epochs | **0.6335** | — |
 
-  +0.0575 on a matched test set. The vocabulary sweep bounds the *lexical* ceiling at ~0.576, and the transformer's margin is signal orthogonal to term identity — most plausibly negation and disambiguating which category of a multi-category business a review is about. Read 0.6335 as a **lower bound**: loss was still falling at the last step, and peak VRAM was 2.65GB of 8GB, so both epochs and batch size have headroom. Always compare on matched test rows — `train_encoder` caps eval at `eval_rows=60000` while `train_baseline` defaults `--test-rows` to the full split, which is an easy way to compare two numbers that were never comparable.
+  +0.0575 over the linear model. The defensible claim is narrow: *a pretrained contextual model clears the lexical ceiling by 5.7 points; the sweep shows the margin is not term-identity signal, but does not identify what it is.* The fine-tuned model differs from TF-IDF on three axes at once — subword tokenisation with no OOV, word order, and pretraining — so attributing the margin to "context" picks one and asserts it. The likeliest alternative is transfer: DistilBERT knows `hygienist` relates to dentistry before it sees a Yelp review, which is a better prior on rare terms than 20k TF-IDF weights can estimate from 400k rows. `--random-init` (same architecture, same tokeniser, no pretrained weights) is the discriminator; a second probe is shuffling word order at eval time, which would rule out the negation-and-syntax story specifically.
+
+  Read 0.6335 as a **lower bound**: loss was still falling at the last step and peak VRAM was 2.65GB of 8GB. And always compare on matched test rows — `train_encoder` caps eval at `eval_rows=60000` while `train_baseline` defaults `--test-rows` to the full split.
+
+- **The decomposition, on one test set:** representation accounts for 0.1452 of the 0.1550 linear→xgb gap (94%), model class for 0.0098 (6%). Metadata is worth 0.0009. Every arm carries a `test_rows` stamp because mixing test sizes in one metrics file is how an unreconstructable number reaches a writeup.
 - **Low SVD explained variance is not a defect.** 0.098 at 256 components is what TF-IDF does — the matrix is near full rank, and recovering most of the variance would take thousands of components, abandoning the reduction. Do not "fix" it by raising `--svd-dims`.
 - **Two label slots are the same label.** `Beer` and `Wine & Spirits` both cover exactly 2413 businesses and score identically to four decimals — Yelp's "Beer, Wine & Spirits" split into perfectly co-occurring labels. They consume two of the 50 slots and are double-counted in macro AP.
 - **Metrics are reported against their prevalence floor** (`train_baseline.evaluate` emits a `lift` column). An AP without its floor is not a result.

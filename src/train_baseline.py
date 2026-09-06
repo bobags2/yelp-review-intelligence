@@ -306,7 +306,7 @@ def main() -> None:
 
     results = {}
 
-    if args.model in ("linear", "both"):
+    if args.model in ("linear", "both", "all"):
         t0 = time.time()
         s = fit_linear(Xtr_lin, ytr, Xte_lin)
         results["linear_tfidf"] = evaluate(yte, s, vocab)
@@ -320,11 +320,10 @@ def main() -> None:
         # Deliberately the full TF-IDF matrix, not the chi2-selected one: a
         # projection of the whole vocabulary is what defines this arm, and it
         # keeps the basis the lr-svd/xgb decomposition was measured on.
-        Xtr = svd.fit_transform(Xtr_txt).astype(np.float32)
-        Xte = svd.transform(Xte_txt).astype(np.float32)
-        if not args.drop_metadata:
-            Xtr = np.hstack([Xtr, tr_num])
-            Xte = np.hstack([Xte, te_num])
+        Xtr_svd = svd.fit_transform(Xtr_txt).astype(np.float32)
+        Xte_svd = svd.transform(Xte_txt).astype(np.float32)
+        Xtr = Xtr_svd if args.drop_metadata else np.hstack([Xtr_svd, tr_num])
+        Xte = Xte_svd if args.drop_metadata else np.hstack([Xte_svd, te_num])
         # A low ratio here is a property of TF-IDF, which is near full rank, not
         # a defect to be fixed by adding components. Recovering most of the
         # variance would take thousands of them, at which point the reduction
@@ -342,19 +341,32 @@ def main() -> None:
         print_report("xgboost / svd + metadata", results["xgb_svd_meta"])
 
     if args.model in ("lr-svd", "all"):
-        t0 = time.time()
-        s = fit_linear_dense(Xtr, ytr, Xte)
-        key = "linear_svd_only" if args.drop_metadata else "linear_svd_meta"
-        results[key] = evaluate(yte, s, vocab)
-        results[key]["fit_seconds"] = time.time() - t0 + svd_seconds
-        print_report(f"linear / svd{'' if args.drop_metadata else ' + metadata'} "
-                     f"(ablation)", results[key])
+        # Both variants from the one SVD: with metadata for the decomposition
+        # against xgb, without it for the width-matched comparison against
+        # chi2-256. The projection is the expensive part and it is shared, so
+        # the second fit is nearly free -- and it keeps every arm in
+        # baseline_metrics.json on one test set instead of accumulating runs
+        # that are no longer comparable.
+        variants = [("linear_svd_meta", Xtr, Xte, " + metadata")]
+        if not args.drop_metadata:
+            variants.append(("linear_svd_only", Xtr_svd, Xte_svd, " (no metadata)"))
+        for key, A, B, label in variants:
+            t0 = time.time()
+            s = fit_linear_dense(A, ytr, B)
+            results[key] = evaluate(yte, s, vocab)
+            results[key]["fit_seconds"] = time.time() - t0 + svd_seconds
+            print_report(f"linear / svd{label} (ablation)", results[key])
 
     # Merge rather than overwrite: running one model at a time (an ablation,
     # say) must not discard results already recorded for the others.
     out = ARTIFACTS_DIR / "baseline_metrics.json"
     merged = json.loads(out.read_text()) if out.exists() else {}
     merged.update(results)
+    # Stamp the evaluation set on every arm. Numbers from different test sizes
+    # sitting side by side in one file is how a figure gets pasted into a
+    # writeup that nobody can reconstruct later.
+    for v in results.values():
+        v["test_rows"] = int(yte.shape[0])
     out.write_text(json.dumps(merged, indent=2))
     print(f"\n[baseline] metrics -> {out}")
 
