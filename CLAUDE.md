@@ -113,19 +113,32 @@ These are load-bearing decisions, each with a comment at its site explaining why
   | linear / tf-idf chi2-20k | 0.5760 | 0.5951 |
   | DistilBERT, 2 epochs | **0.6335** | — |
 
-  +0.0575 over the linear model, and the `--random-init` control decomposes it. Same architecture, same tokeniser, no pretrained weights:
+  +0.0575 over the linear model, and the `--random-init` control decomposes it — **sequentially, not proportionally**. Same architecture, same tokeniser, no pretrained weights:
 
-  | | macro AP | Δ | share |
-  |---|---|---|---|
-  | linear / tf-idf chi2-20k (lexical ceiling) | 0.5760 | — | — |
-  | DistilBERT, random init | 0.5903 | +0.0143 | architecture, 25% |
-  | DistilBERT, pretrained | 0.6335 | +0.0432 | transfer, 75% |
+  | | macro AP | step |
+  |---|---|---|
+  | linear / tf-idf chi2-20k (lexical ceiling) | 0.5760 | — |
+  | DistilBERT, random init | 0.5903 | architecture alone: **+0.0143** over the ceiling |
+  | DistilBERT, pretrained | 0.6335 | pretrained weights on that architecture: a further **+0.0432** |
 
-  Three quarters of the margin is transfer — DistilBERT knowing `hygienist` relates to dentistry before it sees a Yelp review, a better prior on rare terms than 20k TF-IDF weights can estimate from 400k rows. The remaining quarter is the architecture itself: random init still clears the lexical ceiling, so subword tokenisation and word order buy something real.
+  Say it in that order. Transfer is measured *conditional on* the architecture — there is no counterfactual in which pretrained weights exist without the model they are weights for — while the architecture stands alone, which is what the control demonstrates. "75% of the margin is transfer" implies a symmetric attribution the design cannot support.
 
-  **The 75% is an upper bound on transfer.** At a fixed two-epoch budget, "transfer" conflates a higher ceiling with faster convergence, and the random-init arm is visibly further from converged: it gained 0.0225 macro AP in its second epoch against the pretrained model's 0.0092, at a higher loss (0.4475 vs 0.3908). Training the control to convergence is what would separate the two.
+  **The bound, stated once and not chased:** under a fixed two-epoch budget, transfer accounts for at most three quarters of the margin. The control was still improving when training stopped (+0.0225 macro AP in epoch 2 against the pretrained arm's +0.0092, at a higher loss, 0.4475 vs 0.3908), so this overstates transfer's share and understates the architecture's. The pretrained arm is not demonstrably converged either, only closer. Training the control out would move the bound a few points and change nothing about the finding.
 
   Read 0.6335 as a **lower bound**: loss was still falling at the last step and peak VRAM was 2.65GB of 8GB. And always compare on matched test rows — `train_encoder` caps eval at `eval_rows=60000` while `train_baseline` defaults `--test-rows` to the full split.
+
+- **The transfer mechanism is confirmed per-label, not just in aggregate.** Regressing each delta on log10(prevalence) across all 50 labels, same 60,040 rows:
+
+  | delta | mean | slope | r | p |
+  |---|---|---|---|---|
+  | transfer (pretrained − random init) | +0.0432 | −0.0312 | −0.405 | **0.0035** |
+  | architecture (random init − linear) | +0.0144 | −0.0008 | −0.025 | 0.8616 |
+
+  Transfer's benefit scales with rarity (+0.0781 on labels under 1% prevalence vs +0.0317 on those over 10%); the architecture's is flat across three orders of magnitude. That is the predicted signature of a better prior on rare terms, and the flat second delta is what makes it a test rather than a story — it could have come out otherwise. `macro_ap()` now returns the per-label array and every run persists it; `--eval-only` scores an existing checkpoint without retraining.
+
+- **Batching costs more than it saves on CPU EP** (`artifacts/latency_bench.json`): batch 1 is 8.79 ms/review, batch 2 peaks at 117.6 reviews/s, and batch 32 is 17.4 ms/review — twice as expensive per review as batch 1. The README's "32 in one call is ~10x cheaper per review" does not hold for this model here. Per-batch padding pads to the batch maximum, which grows with n until it saturates around batch 8, while ORT already parallelises one inference across 8 threads so there is no compute win to offset it. Length-bucketing within the wait window is the fix; a smaller batch is the workaround. Note also that the 140/s streaming figure was measured against the *synthetic-data MiniLM* graph, not this DistilBERT one, so it does not describe the model you would ship.
+
+  `make_batch` previously cycled a length-varied corpus, so batch composition depended on batch size — n=1 drew only the 5-char entry, n≥4 first pulled in the 342-char one — and the sweep measured padding rather than batching. It now samples with a fixed seed, resampled per iteration.
 
 - **The decomposition, on one test set:** representation accounts for 0.1452 of the 0.1550 linear→xgb gap (94%), model class for 0.0098 (6%). Metadata is worth 0.0009. Every arm carries a `test_rows` stamp because mixing test sizes in one metrics file is how an unreconstructable number reaches a writeup.
 - **Low SVD explained variance is not a defect.** 0.098 at 256 components is what TF-IDF does — the matrix is near full rank, and recovering most of the variance would take thousands of components, abandoning the reduction. Do not "fix" it by raising `--svd-dims`.

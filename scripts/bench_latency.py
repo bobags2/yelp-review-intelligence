@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import statistics
 import sys
 import time
@@ -48,18 +49,35 @@ CORPUS = [
 ]
 
 
-def make_batch(n: int) -> list[str]:
-    return [CORPUS[i % len(CORPUS)] for i in range(n)]
+def make_batch(n: int, rng: random.Random) -> list[str]:
+    """Draw n texts so the length distribution does not depend on n.
+
+    Cycling the corpus (CORPUS[i % len]) made batch *composition* a function of
+    batch size: n=1 got only the 5-char entry, n=2 the two shortest, and n>=4
+    was the first to include the 342-char one. Under per-batch padding that
+    means sequence length grows with batch size, so the sweep measured padding
+    rather than batching -- ms/review went 8.16 -> 5.17 -> 19.03 between n=1, 2
+    and 4, and the harness "suggested" --batch-size 2, which is three times
+    worse than the truth at the sizes that matter.
+
+    Sampling with replacement, resampled every iteration, holds the length
+    distribution constant across sizes while still exercising ragged padding.
+    """
+    return [rng.choice(CORPUS) for _ in range(n)]
 
 
-def bench_one(scorer: Scorer, batch_size: int, iters: int, warmup: int) -> dict:
-    texts = make_batch(batch_size)
+def bench_one(scorer: Scorer, batch_size: int, iters: int, warmup: int,
+              seed: int = 0) -> dict:
+    # Fixed seed so every batch size sees the same draw sequence, resampled per
+    # iteration so the mean length converges rather than depending on one draw.
+    rng = random.Random(seed)
 
     for _ in range(warmup):
-        scorer.score(texts)
+        scorer.score(make_batch(batch_size, rng))
 
     totals, toks, infs = [], [], []
     for _ in range(iters):
+        texts = make_batch(batch_size, rng)
         t0 = time.perf_counter()
         _, tok_ms, inf_ms = scorer.score(texts)
         totals.append((time.perf_counter() - t0) * 1000.0)

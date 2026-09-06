@@ -193,15 +193,30 @@ def evaluate(model, loader, device, amp: bool) -> tuple[np.ndarray, np.ndarray]:
     return np.vstack(scores), np.vstack(targets)
 
 
-def macro_ap(y_true: np.ndarray, y_score: np.ndarray) -> tuple[float, float]:
-    aps, prevs = [], []
+def macro_ap(y_true: np.ndarray, y_score: np.ndarray,
+             vocab: list[str] | None = None) -> tuple[float, float, list[dict]]:
+    """Macro AP, its prevalence floor, and the per-label breakdown.
+
+    Returning only the scalar throws away the array every interesting question
+    needs -- whether a margin concentrates in rare labels, which categories a
+    model is actually failing. Persisting it means each run carries its own
+    breakdown instead of needing a re-evaluation script later.
+    """
+    aps, prevs, per_label = [], [], []
     for j in range(y_true.shape[1]):
         yt = y_true[:, j]
         if yt.sum() == 0 or yt.sum() == len(yt):
             continue
-        aps.append(average_precision_score(yt, y_score[:, j]))
-        prevs.append(yt.mean())
-    return float(np.mean(aps)), float(np.mean(prevs))
+        ap, prev = float(average_precision_score(yt, y_score[:, j])), float(yt.mean())
+        aps.append(ap)
+        prevs.append(prev)
+        per_label.append({
+            "category": vocab[j] if vocab else str(j),
+            "prevalence": prev,
+            "average_precision": ap,
+            "lift": ap / prev if prev > 0 else None,
+        })
+    return float(np.mean(aps)), float(np.mean(prevs)), per_label
 
 
 def main() -> None:
@@ -213,6 +228,9 @@ def main() -> None:
                            dest=field, default=value)
         else:
             p.add_argument(flag, type=type(value), default=value, dest=field)
+    p.add_argument("--eval-only", action="store_true",
+                   help="score the saved checkpoint and write its per-label "
+                        "breakdown; no training")
     args = p.parse_args()
     cfg = TrainConfig(**{k: getattr(args, k) for k in asdict(TrainConfig())})
 
@@ -242,6 +260,29 @@ def main() -> None:
     )
 
     model = MultiLabelEncoder(cfg.model_name, len(vocab), random_init=cfg.random_init).to(device)
+
+    if args.eval_only:
+        # Score an existing checkpoint and write its per-label breakdown. Needed
+        # because runs predating the per-label change persisted only the scalar,
+        # and re-training to recover an array the forward pass already computes
+        # would be absurd.
+        ckpt = ARTIFACTS_DIR / "encoder" / "model.pt"
+        if not ckpt.exists():
+            raise SystemExit(f"no checkpoint at {ckpt}")
+        model.load_state_dict(torch.load(ckpt, map_location=device))
+        y_score, y_true = evaluate(model, eval_loader, device, cfg.amp)
+        ap, floor, per_label = macro_ap(y_true, y_score, vocab)
+        print(f"[encoder] eval-only  macro AP={ap:.4f}  floor={floor:.4f}  "
+              f"lift={ap / floor:.2f}x  rows={y_true.shape[0]:,}")
+        out = ARTIFACTS_DIR / "encoder_eval.json"
+        out.write_text(json.dumps({
+            "macro_ap": ap, "prevalence_floor": floor,
+            "eval_rows": int(y_true.shape[0]),
+            "model_name": cfg.model_name, "random_init": cfg.random_init,
+            "per_label": per_label,
+        }, indent=2))
+        print(f"[encoder] per-label breakdown -> {out}")
+        return
 
     # Rare labels get up-weighted, but the weight is capped. Uncapped
     # pos_weight on a label at 0.2% prevalence is 500x, which makes the loss
@@ -301,11 +342,13 @@ def main() -> None:
                       f"loss={running / seen:.4f} peak_vram={mem:.2f}GB")
 
         y_score, y_true = evaluate(model, eval_loader, device, cfg.amp)
-        ap, floor = macro_ap(y_true, y_score)
+        ap, floor, per_label = macro_ap(y_true, y_score, vocab)
         history.append({"epoch": epoch, "train_loss": running / max(seen, 1),
                         "macro_ap": ap, "prevalence_floor": floor,
                         "lift": ap / floor if floor else None,
-                        "seconds": time.time() - t0})
+                        "eval_rows": int(y_true.shape[0]),
+                        "seconds": time.time() - t0,
+                        "per_label": per_label})
         print(f"[encoder] epoch {epoch}  loss={running / max(seen, 1):.4f}  "
               f"macro AP={ap:.4f}  floor={floor:.4f}  lift={ap / floor:.2f}x  "
               f"({time.time() - t0:.0f}s)")
