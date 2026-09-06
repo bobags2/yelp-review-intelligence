@@ -76,7 +76,17 @@ These are load-bearing decisions, each with a comment at its site explaining why
 - **No business-derived features in the supervised head.** `attributes`, `name`, and business star average encode the label. Only the review and its author are legal inputs. Adding a business column to `features.build` silently invalidates every reported metric.
 - **Explicit Spark schemas in `ingest.py`.** Inference on `business.attributes` produces a different struct depending on sampling, making output non-reproducible.
 - **Median/MAD, never mean/stdev, in `anomaly.robust_zscore`.** The tail being hunted would inflate a standard deviation and hide itself. Components are clipped to [-5, 8] before summing so one saturated signal cannot carry an account into the queue alone, and every component is emitted alongside the total.
-- **The XGBoost head is bottlenecked by the SVD, not by the model.** On the real dataset `svd 256 dims` retains **explained variance 0.098** — compressing 200k TF-IDF features to 256 dims discards ~90% of the variance, and xgb scores *below* the linear baseline as a result (macro AP 0.419 vs 0.568). Synthetic data hides this completely: its vocabulary is small enough that 64 dims retain 0.959. Raise `--svd-dims` before concluding anything about gradient boosting here.
+- **The linear/xgb gap is representation, not model class — measured, not assumed.** Three runs on the real data, `--model all`:
+
+  | model | features | macro AP | micro AP |
+  |---|---|---|---|
+  | `linear_tfidf` | 200k sparse TF-IDF | 0.5680 | 0.5795 |
+  | `linear_svd_meta` | 256 dense LSA + metadata | 0.4291 | 0.4932 |
+  | `xgb_svd_meta` | 256 dense LSA + metadata | 0.4190 | 0.4479 |
+
+  Holding the estimator fixed and changing only the features costs 0.1389 macro AP; holding the features fixed and changing only the model class costs 0.0101. The representation accounts for **93%** of the gap, the model class for 7%. Gradient boosting is not meaningfully worse here — it was handed a worse input. Never quote the first and third rows without the second.
+- **Low SVD explained variance is not a defect.** 0.098 at 256 components is what TF-IDF does — the matrix is near full rank, and recovering most of the variance would take thousands of components, abandoning the reduction. Do not "fix" it by raising `--svd-dims`.
+- **Two label slots are the same label.** `Beer` and `Wine & Spirits` both cover exactly 2413 businesses and score identically to four decimals — Yelp's "Beer, Wine & Spirits" split into perfectly co-occurring labels. They consume two of the 50 slots and are double-counted in macro AP.
 - **Metrics are reported against their prevalence floor** (`train_baseline.evaluate` emits a `lift` column). An AP without its floor is not a result.
 - **Kafka offsets are committed after scoring**, never auto-committed (`stream/consumer.py`).
 - **The producer checks delivery.** `flush()` returns what it could not deliver; that count and `delivered` vs `sent` are both asserted before exit, because an unreachable broker otherwise yields `delivered=0, failed=0` and exit 0.

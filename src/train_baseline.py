@@ -33,6 +33,7 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.preprocessing import StandardScaler
 
 from src.config import (
     ARTIFACTS_DIR,
@@ -159,6 +160,25 @@ def fit_linear(Xtr, ytr, Xte):
     return scores
 
 
+def fit_linear_dense(Xtr, ytr, Xte):
+    """The ablation: the linear model on the *same* features XGBoost sees.
+
+    linear/tf-idf and xgb/svd differ in two ways at once -- model class and
+    representation -- so their gap cannot attribute itself. Holding the
+    estimator and its hyperparameters fixed and changing only the features
+    separates the two: collapse to the xgb score means the 256-dim projection
+    is the cause and the model class is exonerated; staying near the sparse
+    score means gradient boosting is genuinely the weaker fit here.
+
+    Standardised first because logistic regression is scale-sensitive across
+    heterogeneous dense columns (SVD components beside raw review counts) and
+    trees are not. Without it the ablation would confound representation with
+    feature scaling, and give the linear model an unfairly weak showing.
+    """
+    scaler = StandardScaler()
+    return fit_linear(scaler.fit_transform(Xtr), ytr, scaler.transform(Xte))
+
+
 def fit_xgb(Xtr, ytr, Xte):
     from xgboost import XGBClassifier
 
@@ -201,7 +221,9 @@ def fit_xgb(Xtr, ytr, Xte):
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--model", choices=["linear", "xgb", "both"], default="both")
+    p.add_argument("--model", choices=["linear", "xgb", "lr-svd", "both", "all"],
+                   default="both",
+                   help="lr-svd is the ablation: linear model on the xgb feature matrix")
     p.add_argument("--max-features", type=int, default=200_000)
     p.add_argument("--svd-dims", type=int, default=256)
     p.add_argument("--train-rows", type=int, default=BASELINE_SAMPLE_ROWS)
@@ -242,21 +264,41 @@ def main() -> None:
         results["linear_tfidf"]["fit_seconds"] = time.time() - t0
         print_report("linear / tf-idf", results["linear_tfidf"])
 
-    if args.model in ("xgb", "both"):
+    if args.model in ("xgb", "lr-svd", "both", "all"):
         t0 = time.time()
         dims = min(args.svd_dims, min(Xtr_txt.shape) - 1)
         svd = TruncatedSVD(n_components=dims, random_state=RANDOM_SEED)
         Xtr = np.hstack([svd.fit_transform(Xtr_txt).astype(np.float32), tr_num])
         Xte = np.hstack([svd.transform(Xte_txt).astype(np.float32), te_num])
+        # A low ratio here is a property of TF-IDF, which is near full rank, not
+        # a defect to be fixed by adding components. Recovering most of the
+        # variance would take thousands of them, at which point the reduction
+        # has been abandoned. The lr-svd ablation, not a larger SVD, is what
+        # tells you whether this projection is costing you anything.
         print(f"[baseline] svd {dims} dims, "
               f"explained variance {svd.explained_variance_ratio_.sum():.3f}")
+        svd_seconds = time.time() - t0
+
+    if args.model in ("xgb", "both", "all"):
+        t0 = time.time()
         s = fit_xgb(Xtr, ytr, Xte)
         results["xgb_svd_meta"] = evaluate(yte, s, vocab)
-        results["xgb_svd_meta"]["fit_seconds"] = time.time() - t0
+        results["xgb_svd_meta"]["fit_seconds"] = time.time() - t0 + svd_seconds
         print_report("xgboost / svd + metadata", results["xgb_svd_meta"])
 
+    if args.model in ("lr-svd", "all"):
+        t0 = time.time()
+        s = fit_linear_dense(Xtr, ytr, Xte)
+        results["linear_svd_meta"] = evaluate(yte, s, vocab)
+        results["linear_svd_meta"]["fit_seconds"] = time.time() - t0 + svd_seconds
+        print_report("linear / svd + metadata (ablation)", results["linear_svd_meta"])
+
+    # Merge rather than overwrite: running one model at a time (an ablation,
+    # say) must not discard results already recorded for the others.
     out = ARTIFACTS_DIR / "baseline_metrics.json"
-    out.write_text(json.dumps(results, indent=2))
+    merged = json.loads(out.read_text()) if out.exists() else {}
+    merged.update(results)
+    out.write_text(json.dumps(merged, indent=2))
     print(f"\n[baseline] metrics -> {out}")
 
 
