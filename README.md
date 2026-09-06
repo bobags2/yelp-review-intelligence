@@ -232,7 +232,39 @@ the model's curve. At batch 2 the per-batch commit and produce are paid 16x more
 often, and end-to-end throughput falls to 4.8/s — less than half. A correct
 measurement, applied outside the scope it measured.
 
-Note the absolute numbers: ~11 reviews/s for DistilBERT on CPU EP. An earlier
+### What the transformer costs
+
+The gate result is +0.0575 macro AP (0.6335 vs 0.5760). The other side of that
+trade is measured, not asserted — same box, same provider, same corpus, the
+linear model exported through `skl2onnx` and run in the same onnxruntime
+(`scripts/bench_linear_serving.py`):
+
+| | peak throughput | ms/review | graph |
+|---|---|---|---|
+| TF-IDF 20k + one-vs-rest LR | 7,560/s | 0.135 | 10.6 MB |
+| DistilBERT | 118/s | 6.9 | 265.7 MB |
+
+**64x on throughput for a 10% relative gain in macro AP.** At low request rates
+the transformer is clearly worth it; past some rate the linear model wins on
+cost, and the crossover is arithmetic once you fix a per-review compute budget.
+
+But the 64x does not survive contact with this consumer. At batch 8 the
+streaming run scored 2,006 events in 175.5s, of which scoring was 89.8s —
+leaving ~309 ms per batch of offset-commit and out-topic-produce. The linear
+model's 3.4 ms of scoring per batch of 8 vanishes into that same 309 ms, so the
+realised end-to-end gap is roughly 26/s against DistilBERT's measured 11.4/s.
+About 2x, not 64x. The model is 64x cheaper and the pipeline gives you 2x of it.
+(The 64x and the 309 ms are measured; the 26/s is arithmetic from them.)
+
+That is the decision as it actually stands: fix the per-batch overhead first,
+because until it is fixed the model choice is nearly free either way — and once
+it is fixed, the 64x reasserts itself and the choice matters a great deal.
+
+Note the absolute numbers, and note what they are a property of: ~11 reviews/s
+is DistilBERT on **CPUExecutionProvider on this box**, not a property of
+DistilBERT. `onnxruntime-gpu` on the 3070 Ti would change it substantially, and
+`make serve-gpu` exists for exactly that. The provider belongs in any quotation
+of this number. An earlier
 figure of 140/s in this repo was measured against a MiniLM graph trained on
 synthetic data, not the model you would ship. Serving a transformer on CPU is
 expensive, and that cost belongs beside the +0.057 macro AP it buys.
