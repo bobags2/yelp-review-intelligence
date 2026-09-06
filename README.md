@@ -88,7 +88,7 @@ data/raw/*.json
    ▼
 data/parquet/{business,review,user,checkin,tip}
    │  src/features.py    top-K multi-hot labels, reviewer features, grouped split
-   │  src/anomaly.py     5 behavioural signals -> robust z -> ranked queue
+   │  src/anomaly.py     5 signals -> shrink -> rank-normalise -> harm-ranked queue
    ▼
 data/features/{review_labeled,reviewer_anomaly}
    │  src/train_baseline.py
@@ -106,10 +106,29 @@ artifacts/{category_vocab.json,baseline_metrics.json,review_queue_top.csv}
 | `deviation` | mean absolute gap from business consensus (businesses with ≥10 reviews) |
 | `precocity` | inverse log of days between account creation and first review |
 
-Components are robust-z scored, clipped to [-5, 8] so one saturated signal
-cannot carry an account into the queue alone, then summed. Every component is
-emitted alongside the total, so a flagged account arrives with its reason —
-the minimum bar for anything a human is expected to action.
+Per-review ratios are first shrunk toward the population mean by sample size
+(pseudo-count 10), because a 2-of-3 duplication rate and a 60-of-200 rate are
+not the same evidence. Components are then **rank-normalised** — mapped to their
+percentile in a persisted empirical CDF, then through the normal quantile — and
+summed.
+
+Rank, not median/MAD, because MAD cannot scale a zero-inflated signal. Most
+accounts have zero duplicate reviews, so `duplication`'s MAD came out at 0.0010
+and *any* account with meaningful duplication landed past the +8 clip: an account
+with 18 duplicates out of 24 scored identically to one with 2 out of 128. The
+clip was doing all the discrimination, at exactly the end of the distribution
+that matters. A percentile rank is defined on zero-inflated data, needs no scale
+estimate, and is commensurate across signals by construction.
+
+The queue orders on `queue_score = anomaly_score × log1p(n_reviews)`, not on
+`anomaly_score`. Raw anomaly answers "how unusual is this account"; a review
+queue exists to answer "which account costs most if nobody looks", and a
+3-review burst affects three reviews where a 200-review account at 0.3
+duplication affects sixty. `--rank-by anomaly_score` restores the older
+ordering.
+
+Every component is emitted alongside the total, so a flagged account arrives with
+its reason — the minimum bar for anything a human is expected to action.
 
 ## Tuning
 

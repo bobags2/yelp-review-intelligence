@@ -36,7 +36,10 @@ import os
 import time
 
 from pyspark.sql import DataFrame, SparkSession
+import numpy as np
+import pandas as pd
 from pyspark.sql import functions as F
+from pyspark.sql.functions import pandas_udf
 from pyspark.sql.window import Window
 
 from src.config import (
@@ -67,6 +70,13 @@ SHRINKAGE_PSEUDOCOUNT = float(os.environ.get("SHRINKAGE_PSEUDOCOUNT", "10"))
 
 # Populated by score() before the scaler is written.
 _SHRINK_PRIOR: dict[str, float] = {}
+
+# Breakpoints for the empirical CDF, one list per signal, written to the scaler.
+_CDF_BREAKPOINTS: dict[str, list[float]] = {}
+
+# Resolution of the persisted CDF. 1001 points puts the quantisation error at
+# ~0.05 percentile, far below anything that changes a queue ordering.
+CDF_POINTS = int(os.environ.get("CDF_POINTS", "1001"))
 
 
 def _business_consensus(review: DataFrame) -> DataFrame:
@@ -199,91 +209,91 @@ def shrink_signals(df: DataFrame) -> tuple[DataFrame, dict[str, float]]:
     return out, prior
 
 
-def robust_zscore(df: DataFrame, columns: list[str],
-                  names: list[str] | None = None) -> DataFrame:
-    """Median/MAD standardisation.
+def rank_normalise(df: DataFrame, columns: list[str],
+                   names: list[str] | None = None) -> DataFrame:
+    """Map each signal to its percentile rank, then to a normal quantile.
 
-    Mean/stdev is the wrong scaler here: the tail we are hunting is exactly the
-    thing that would inflate the standard deviation and hide itself. MAD is
-    scaled by 1.4826 so it estimates sigma for normally distributed data.
+    Median/MAD cannot scale a zero-inflated signal. `duplication` is zero for
+    most accounts, so even after shrinkage its MAD is 0.0010 and *any* account
+    with meaningful duplication lands past the +8 clip: the component stops
+    discriminating exactly where it matters, and the clip does all the work.
+    That is not a tuning problem, it is robust scaling having nothing to
+    estimate from.
 
-    `columns` are the columns to scale; `names` are the signal names they are
-    persisted and emitted under. The two differ once shrinkage is in play --
-    the scaled column is `s_duplication` but the scaler and the serving
-    contract must both say `duplication`.
+    A percentile rank is defined on zero-inflated data, needs no scale
+    estimate, and is commensurate across signals by construction. Passing it
+    through the normal quantile keeps the components on a z-like scale, so the
+    existing clip and the "how many sigmas" reading still mean something --
+    though with 1.99M accounts the extreme rank maps to about 5.0 and the clip
+    almost never binds.
+
+    The breakpoints are persisted and the serving path interpolates the same
+    table, so batch and online agree by construction rather than by two
+    implementations happening to match.
     """
+    from scipy.stats import norm
+
     names = names or columns
     col_of = dict(zip(names, columns))
+    probs = [i / (CDF_POINTS - 1) for i in range(CDF_POINTS)]
 
-    medians = df.approxQuantile(columns, [0.5], 0.001)
-    med = {n: (m[0] if m else 0.0) for n, m in zip(names, medians)}
-
-    tmp = df
-    for n in names:
-        tmp = tmp.withColumn(f"__ad_{n}", F.abs(F.col(col_of[n]) - F.lit(med[n])))
-
-    mad_rows = tmp.approxQuantile([f"__ad_{n}" for n in names], [0.5], 0.001)
-    mad = {n: (m[0] if m else 0.0) for n, m in zip(names, mad_rows)}
-
-    # Resolve every scale before writing any column, so the value used for
-    # scoring and the value persisted for serving are the same object. Deriving
-    # them separately is how the batch and serving paths silently diverged:
-    # `duplication` is zero for most accounts, so its MAD is zero on every run,
-    # and the fallback below is its normal path, not an edge case.
-    resolved: dict[str, float] = {}
-    method: dict[str, str] = {}
-    for n in names:
-        scale = 1.4826 * mad[n]
-        if scale > 1e-9:
-            method[n] = "mad"
-        else:
-            # Degenerate spread (more than half of accounts sit exactly at the
-            # median). Fall back to standard deviation rather than dividing by
-            # ~zero and manufacturing infinite z-scores.
-            stats = df.select(F.stddev_samp(col_of[n]).alias("s")).collect()[0]["s"]
-            if stats and stats > 1e-9:
-                scale, method[n] = float(stats), "stddev"
-            else:
-                scale, method[n] = 1.0, "unit"
-        resolved[n] = float(scale)
+    global _CDF_BREAKPOINTS
+    _CDF_BREAKPOINTS = {}
+    qs = df.approxQuantile(columns, probs, 0.0001)
+    for n, q in zip(names, qs):
+        _CDF_BREAKPOINTS[n] = [float(v) for v in q]
 
     out = df
     for n in names:
-        out = out.withColumn(
-            f"z_{n}", (F.col(col_of[n]) - F.lit(med[n])) / F.lit(resolved[n])
-        )
+        bp = np.asarray(_CDF_BREAKPOINTS[n], dtype=np.float64)
+        eps = 0.5 / len(bp)
 
-    print("[anomaly] robust scaling: " + ", ".join(
-        f"{n} median={med[n]:.4f} scale={resolved[n]:.4f} ({method[n]})" for n in names
+        # A factory, not default arguments: pandas_udf requires a type hint on
+        # every parameter, so the breakpoints have to be captured by closure
+        # rather than bound as defaults.
+        def _make_rank(bp=bp, eps=eps):
+            def _rank(col: pd.Series) -> pd.Series:
+                cdf = np.searchsorted(
+                    bp, col.to_numpy(dtype=np.float64), side="right") / len(bp)
+                return pd.Series(norm.ppf(np.clip(cdf, eps, 1.0 - eps)))
+            return _rank
+
+        out = out.withColumn(f"z_{n}",
+                             pandas_udf(_make_rank(), "double")(F.col(col_of[n])))
+
+    print("[anomaly] rank-normalised: " + ", ".join(
+        f"{n} p50={_CDF_BREAKPOINTS[n][len(_CDF_BREAKPOINTS[n]) // 2]:.4f}" for n in names
     ))
+    return out
 
-    # Persist so the serving path scores a single account identically to the
-    # batch job. Recomputing medians online would make an account's score
-    # depend on when it was scored, which makes an enforcement decision
-    # impossible to audit after the fact.
-    scaler_path = ARTIFACTS_DIR / "anomaly_scaler.json"
-    scaler_path.write_text(json.dumps({
-        "signals": names,
-        # Serving receives an account's *raw* signals and review count and
-        # redoes the shrinkage itself, so these priors are part of the contract
-        # exactly as median/scale are.
+
+def _write_scaler() -> None:
+    """Persist everything the serving path needs to reproduce a batch score.
+
+    Three things, and all three are part of the contract: the shrinkage priors,
+    the CDF breakpoints, and the clip. Serving interpolates the same table
+    rather than estimating anything of its own, so the two paths agree by
+    construction. scripts/check_scoring_parity.py is what proves they still do.
+    """
+    path = ARTIFACTS_DIR / "anomaly_scaler.json"
+    path.write_text(json.dumps({
+        "method": "rank_normal",
+        "signals": SIGNALS,
         "shrinkage": {
             "pseudo_count": SHRINKAGE_PSEUDOCOUNT,
             "shrunk_signals": SHRUNK_SIGNALS,
             "prior_mean": _SHRINK_PRIOR,
         },
-        "median": med,
-        "scale": resolved,
-        # Which estimator produced each scale. A signal that has silently
-        # fallen back to `unit` is something you want visible in the artifact
-        # rather than buried in a run log.
-        "scale_method": method,
+        # Empirical CDF per signal, on the *shrunk* values. Median/MAD is gone:
+        # it cannot scale a zero-inflated signal, which is how `duplication`
+        # ended up with a 0.0010 scale and a clip doing all the discrimination.
+        "cdf_breakpoints": _CDF_BREAKPOINTS,
+        "cdf_points": CDF_POINTS,
         "clip": {"low": -5.0, "high": 8.0},
         "min_reviews_per_user": MIN_REVIEWS_PER_USER,
         "min_reviews_per_business": MIN_REVIEWS_PER_BUSINESS,
     }, indent=2))
-    print(f"[anomaly] scaler -> {scaler_path}")
-    return out
+    print(f"[anomaly] scaler -> {path} (rank_normal, {CDF_POINTS} breakpoints/signal)")
 
 
 def score(df: DataFrame) -> DataFrame:
@@ -292,7 +302,8 @@ def score(df: DataFrame) -> DataFrame:
 
     # Scale the shrunk values, not the raw ones: the raw ratios are what put
     # three-review accounts at the top of the queue.
-    scored = robust_zscore(df, [f"s_{c}" for c in SIGNALS], names=SIGNALS)
+    scored = rank_normalise(df, [f"s_{c}" for c in SIGNALS], names=SIGNALS)
+    _write_scaler()
     z_cols = [F.col(f"z_{c}") for c in SIGNALS]
     # Clip each component before summing so one saturated signal cannot carry an
     # account into the queue on its own.

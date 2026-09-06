@@ -133,6 +133,34 @@ class Scorer:
         return probs, (t1 - t0) * 1000, (t2 - t1) * 1000
 
 
+def _norm_ppf(p: float) -> float:
+    """Inverse standard normal CDF.
+
+    Inlined rather than importing scipy: the serving image should not carry
+    scipy for one function, and this is Acklam's rational approximation, whose
+    error is under 1.15e-9 -- four orders below the 1e-6 tolerance the parity
+    check enforces.
+    """
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+    pl, ph = 0.02425, 1 - 0.02425
+    if p < pl:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) /                ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    if p > ph:
+        q = math.sqrt(-2 * math.log(1 - p))
+        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) /                 ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    q = p - 0.5
+    r = q * q
+    return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q /            (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+
+
 class AnomalyScorer:
     def __init__(self) -> None:
         path = ARTIFACTS / "anomaly_scaler.json"
@@ -140,8 +168,12 @@ class AnomalyScorer:
             raise RuntimeError(f"No scaler at {path}. Run `python -m src.anomaly` first.")
         cfg = json.loads(path.read_text())
         self.signals: list[str] = cfg["signals"]
-        self.median: dict = cfg["median"]
-        self.scale: dict = cfg["scale"]
+        # Only the robust_z path uses these; rank_normal has no scale estimate.
+        self.median: dict = cfg.get("median", {})
+        self.method: str = cfg.get("method", "robust_z")
+        self.scale: dict = cfg.get("scale", {})
+        self.breakpoints: dict = {k: np.asarray(v, dtype=np.float64)
+                                  for k, v in (cfg.get("cdf_breakpoints") or {}).items()}
         self.lo: float = cfg["clip"]["low"]
         self.hi: float = cfg["clip"]["high"]
 
@@ -159,11 +191,14 @@ class AnomalyScorer:
         # component differ from the offline one by the ratio of its true scale,
         # with nothing erroring. A disabled endpoint gets noticed; a wrong
         # enforcement score does not.
-        missing = [s for s in self.signals if not self.scale.get(s)]
+        if self.method == "rank_normal":
+            missing = [s for s in self.signals if s not in self.breakpoints]
+        else:
+            missing = [s for s in self.signals if not self.scale.get(s)]
         if missing:
             raise RuntimeError(
-                f"scaler has no usable scale for {missing}; regenerate with "
-                f"`python -m src.anomaly`"
+                f"scaler cannot reproduce the batch score for {missing}; "
+                f"regenerate with `python -m src.anomaly`"
             )
 
     def score(self, signals: dict[str, float], n_reviews: int) -> dict:
@@ -180,7 +215,16 @@ class AnomalyScorer:
             raw = float(signals[s])
             if s in self.shrunk_signals:
                 raw = (n * raw + k * float(self.prior_mean[s])) / (n + k)
-            z = (raw - self.median[s]) / self.scale[s]
+            if self.method == "rank_normal":
+                # Same breakpoint table the batch job wrote, same interpolation:
+                # position in the empirical CDF, then the normal quantile. No
+                # scale estimated here, so there is nothing to diverge.
+                bp = self.breakpoints[s]
+                eps = 0.5 / len(bp)
+                cdf = float(np.searchsorted(bp, raw, side="right")) / len(bp)
+                z = float(_norm_ppf(min(max(cdf, eps), 1.0 - eps)))
+            else:
+                z = (raw - self.median[s]) / self.scale[s]
             z = max(self.lo, min(self.hi, z))
             components[s] = round(z, 4)
             total += z

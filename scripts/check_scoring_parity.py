@@ -144,7 +144,13 @@ def main() -> int:
         f"[parity] OK  {checked} sampled accounts match the batch score within "
         f"{args.tolerance:.0e}"
     )
-    print(f"[parity] scales in use: " + ", ".join(f"{s}={scorer.scale[s]:.4f}" for s in SIGNALS))
+    if getattr(scorer, "method", "robust_z") == "rank_normal":
+        print("[parity] method=rank_normal, "
+              f"{len(next(iter(scorer.breakpoints.values())))} CDF breakpoints/signal "
+              "(no scale estimate to diverge)")
+    else:
+        print("[parity] scales in use: "
+              + ", ".join(f"{s}={scorer.scale[s]:.4f}" for s in SIGNALS))
     return 0
 
 

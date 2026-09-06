@@ -7,6 +7,7 @@ on the 64 GB workstation and inside a 3 GB CI container without edits.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from pyspark.sql import SparkSession
@@ -60,6 +61,15 @@ def get_spark(app_name: str) -> SparkSession:
     Requires Java 17+ for Spark 4.x. Check with `java -version`.
     """
     Path(SPARK_LOCAL_DIR).mkdir(parents=True, exist_ok=True)
+
+    # Pin the worker interpreter to the one running the driver. Spark otherwise
+    # launches Python workers with whatever `python3` is first on PATH, which in
+    # a venv -- or anywhere the system Python is a different minor version --
+    # fails with PYTHON_VERSION_MISMATCH. It stays latent until the first Python
+    # UDF: pure Spark SQL expressions never start a worker, so a pipeline can
+    # run for hours before hitting it.
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
     builder = (
         SparkSession.builder.appName(app_name)
