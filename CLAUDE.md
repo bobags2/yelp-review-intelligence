@@ -87,6 +87,18 @@ These are load-bearing decisions, each with a comment at its site explaining why
   | `xgb_svd_meta` | 256 dense LSA + metadata | 0.4190 | 0.4479 |
 
   Holding the estimator fixed and changing only the features costs 0.1389 macro AP; holding the features fixed and changing only the model class costs 0.0101. The representation accounts for **93%** of the gap, the model class for 7%. Gradient boosting is not meaningfully worse here — it was handed a worse input. Never quote the first and third rows without the second.
+- **The task is lexical, and a few thousand terms carry it** (`scripts/sweep_vocab_size.py`, chi2 selection with the estimator held fixed):
+
+  | k features | macro AP | % of peak |
+  |---|---|---|
+  | 256 | 0.3909 | 67.8% |
+  | 1,000 | 0.4789 | 83.1% |
+  | 5,000 | 0.5516 | 95.7% |
+  | 20,000 | **0.5762** | 100% |
+  | 100,000 | 0.5735 | 99.5% |
+  | 200,000 | 0.5680 | 98.6% |
+
+  5k selected terms recover 95.7%; the curve peaks at 20k and the full 200k vocabulary is *worse* than a selected 20k subset while taking 4x as long to fit (915s vs 224s). The last 180k terms are net noise — at k=100k the weakest selected feature scores chi2 3.0. Two consequences: `--max-features 200000` is not the right default, and since the signal is concentrated in a modest set of distinctive terms, a contextual model's advantage (disambiguating words by context) has little left to work with. Note also that 256 chi2-selected *terms* (0.3909) score below 256 *LSA components* (0.4291) — LSA components are combinations of all 200k terms, so at equal width the projection carries more than the best individual terms. Dimensionality, not the density of the representation, is what the lr-svd ablation was measuring.
 - **Low SVD explained variance is not a defect.** 0.098 at 256 components is what TF-IDF does — the matrix is near full rank, and recovering most of the variance would take thousands of components, abandoning the reduction. Do not "fix" it by raising `--svd-dims`.
 - **Two label slots are the same label.** `Beer` and `Wine & Spirits` both cover exactly 2413 businesses and score identically to four decimals — Yelp's "Beer, Wine & Spirits" split into perfectly co-occurring labels. They consume two of the 50 slots and are double-counted in macro AP.
 - **Metrics are reported against their prevalence floor** (`train_baseline.evaluate` emits a `lift` column). An AP without its floor is not a result.
