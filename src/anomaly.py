@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 
 from pyspark.sql import DataFrame, SparkSession
@@ -50,6 +51,22 @@ from src.config import (
 MIN_REVIEWS_PER_USER = 3        # below this, every ratio is noise
 MIN_REVIEWS_PER_BUSINESS = 10   # below this, there is no consensus to deviate from
 SIGNALS = ["burstiness", "duplication", "rating_extremity", "deviation", "precocity"]
+
+# Signals that are per-review aggregates, and so are only as trustworthy as the
+# review count behind them. `precocity` is excluded: it is a single event (the
+# gap from signup to first review), not an average, so a small n does not make
+# it noisy.
+SHRUNK_SIGNALS = ["burstiness", "duplication", "rating_extremity", "deviation"]
+
+# Empirical-Bayes pseudo-count. An account with n reviews gets its ratio pulled
+# toward the population mean with weight k/(n+k), so at k=10 a 2-of-3
+# duplication rate is pulled hard toward the base rate while a 60-of-200 rate is
+# barely moved. Without this the queue fills with three-review accounts, whose
+# ratios saturate every signal at once on the thinnest possible evidence.
+SHRINKAGE_PSEUDOCOUNT = float(os.environ.get("SHRINKAGE_PSEUDOCOUNT", "10"))
+
+# Populated by score() before the scaler is written.
+_SHRINK_PRIOR: dict[str, float] = {}
 
 
 def _business_consensus(review: DataFrame) -> DataFrame:
@@ -148,22 +165,65 @@ def compute_signals(spark: SparkSession) -> DataFrame:
     return df
 
 
-def robust_zscore(df: DataFrame, columns: list[str]) -> DataFrame:
+def shrink_signals(df: DataFrame) -> tuple[DataFrame, dict[str, float]]:
+    """Pull small-sample ratios toward the population mean.
+
+    A three-review account with two duplicates reports duplication 0.667, the
+    same value a 200-review account with 133 duplicates reports -- but one is
+    two events and the other is 133. Shrinking by sample size restores the
+    ordering the evidence supports:
+
+        shrunk = (n * observed + k * prior) / (n + k)
+
+    Returns the frame with `s_<signal>` columns added, and the priors, which
+    have to be persisted so the serving path can reproduce the same arithmetic
+    from an account's raw signals and review count.
+    """
+    means = df.select(*[F.avg(c).alias(c) for c in SHRUNK_SIGNALS]).collect()[0]
+    prior = {c: float(means[c] if means[c] is not None else 0.0) for c in SHRUNK_SIGNALS}
+
+    k = F.lit(SHRINKAGE_PSEUDOCOUNT)
+    n = F.col("n_reviews").cast("double")
+    out = df
+    for c in SIGNALS:
+        if c in SHRUNK_SIGNALS:
+            out = out.withColumn(
+                f"s_{c}", (n * F.col(c) + k * F.lit(prior[c])) / (n + k)
+            )
+        else:
+            out = out.withColumn(f"s_{c}", F.col(c))
+
+    print("[anomaly] shrinkage k=%.1f toward " % SHRINKAGE_PSEUDOCOUNT + ", ".join(
+        f"{c}={prior[c]:.4f}" for c in SHRUNK_SIGNALS
+    ))
+    return out, prior
+
+
+def robust_zscore(df: DataFrame, columns: list[str],
+                  names: list[str] | None = None) -> DataFrame:
     """Median/MAD standardisation.
 
     Mean/stdev is the wrong scaler here: the tail we are hunting is exactly the
     thing that would inflate the standard deviation and hide itself. MAD is
     scaled by 1.4826 so it estimates sigma for normally distributed data.
+
+    `columns` are the columns to scale; `names` are the signal names they are
+    persisted and emitted under. The two differ once shrinkage is in play --
+    the scaled column is `s_duplication` but the scaler and the serving
+    contract must both say `duplication`.
     """
+    names = names or columns
+    col_of = dict(zip(names, columns))
+
     medians = df.approxQuantile(columns, [0.5], 0.001)
-    med = {c: (m[0] if m else 0.0) for c, m in zip(columns, medians)}
+    med = {n: (m[0] if m else 0.0) for n, m in zip(names, medians)}
 
     tmp = df
-    for c in columns:
-        tmp = tmp.withColumn(f"__ad_{c}", F.abs(F.col(c) - F.lit(med[c])))
+    for n in names:
+        tmp = tmp.withColumn(f"__ad_{n}", F.abs(F.col(col_of[n]) - F.lit(med[n])))
 
-    mad_rows = tmp.approxQuantile([f"__ad_{c}" for c in columns], [0.5], 0.001)
-    mad = {c: (m[0] if m else 0.0) for c, m in zip(columns, mad_rows)}
+    mad_rows = tmp.approxQuantile([f"__ad_{n}" for n in names], [0.5], 0.001)
+    mad = {n: (m[0] if m else 0.0) for n, m in zip(names, mad_rows)}
 
     # Resolve every scale before writing any column, so the value used for
     # scoring and the value persisted for serving are the same object. Deriving
@@ -172,27 +232,29 @@ def robust_zscore(df: DataFrame, columns: list[str]) -> DataFrame:
     # and the fallback below is its normal path, not an edge case.
     resolved: dict[str, float] = {}
     method: dict[str, str] = {}
-    for c in columns:
-        scale = 1.4826 * mad[c]
+    for n in names:
+        scale = 1.4826 * mad[n]
         if scale > 1e-9:
-            method[c] = "mad"
+            method[n] = "mad"
         else:
             # Degenerate spread (more than half of accounts sit exactly at the
             # median). Fall back to standard deviation rather than dividing by
             # ~zero and manufacturing infinite z-scores.
-            stats = df.select(F.stddev_samp(c).alias("s")).collect()[0]["s"]
+            stats = df.select(F.stddev_samp(col_of[n]).alias("s")).collect()[0]["s"]
             if stats and stats > 1e-9:
-                scale, method[c] = float(stats), "stddev"
+                scale, method[n] = float(stats), "stddev"
             else:
-                scale, method[c] = 1.0, "unit"
-        resolved[c] = float(scale)
+                scale, method[n] = 1.0, "unit"
+        resolved[n] = float(scale)
 
     out = df
-    for c in columns:
-        out = out.withColumn(f"z_{c}", (F.col(c) - F.lit(med[c])) / F.lit(resolved[c]))
+    for n in names:
+        out = out.withColumn(
+            f"z_{n}", (F.col(col_of[n]) - F.lit(med[n])) / F.lit(resolved[n])
+        )
 
     print("[anomaly] robust scaling: " + ", ".join(
-        f"{c} median={med[c]:.4f} scale={resolved[c]:.4f} ({method[c]})" for c in columns
+        f"{n} median={med[n]:.4f} scale={resolved[n]:.4f} ({method[n]})" for n in names
     ))
 
     # Persist so the serving path scores a single account identically to the
@@ -201,7 +263,15 @@ def robust_zscore(df: DataFrame, columns: list[str]) -> DataFrame:
     # impossible to audit after the fact.
     scaler_path = ARTIFACTS_DIR / "anomaly_scaler.json"
     scaler_path.write_text(json.dumps({
-        "signals": columns,
+        "signals": names,
+        # Serving receives an account's *raw* signals and review count and
+        # redoes the shrinkage itself, so these priors are part of the contract
+        # exactly as median/scale are.
+        "shrinkage": {
+            "pseudo_count": SHRINKAGE_PSEUDOCOUNT,
+            "shrunk_signals": SHRUNK_SIGNALS,
+            "prior_mean": _SHRINK_PRIOR,
+        },
         "median": med,
         "scale": resolved,
         # Which estimator produced each scale. A signal that has silently
@@ -217,7 +287,12 @@ def robust_zscore(df: DataFrame, columns: list[str]) -> DataFrame:
 
 
 def score(df: DataFrame) -> DataFrame:
-    scored = robust_zscore(df, SIGNALS)
+    global _SHRINK_PRIOR
+    df, _SHRINK_PRIOR = shrink_signals(df)
+
+    # Scale the shrunk values, not the raw ones: the raw ratios are what put
+    # three-review accounts at the top of the queue.
+    scored = robust_zscore(df, [f"s_{c}" for c in SIGNALS], names=SIGNALS)
     z_cols = [F.col(f"z_{c}") for c in SIGNALS]
     # Clip each component before summing so one saturated signal cannot carry an
     # account into the queue on its own.
@@ -225,12 +300,26 @@ def score(df: DataFrame) -> DataFrame:
     total = clipped[0]
     for c in clipped[1:]:
         total = total + c
-    return scored.withColumn("anomaly_score", total)
+    scored = scored.withColumn("anomaly_score", total)
+
+    # anomaly_score answers "how unusual is this account". That is not the
+    # question a reviewer queue is for. A three-review burst account puts three
+    # bad reviews in front of users; a 200-review account at 0.3 duplication
+    # puts sixty. Enforcement value is roughly anomaly x volume, so the queue
+    # orders on that instead -- log1p damps the volume term so a prolific but
+    # only-mildly-odd account cannot buy its way to the top on count alone.
+    return scored.withColumn(
+        "queue_score", F.col("anomaly_score") * F.log1p(F.col("n_reviews").cast("double"))
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rank reviewer accounts by behavioural anomaly")
     parser.add_argument("--top", type=int, default=200, help="rows to print and export")
+    parser.add_argument("--rank-by", choices=["queue_score", "anomaly_score"],
+                        default="queue_score",
+                        help="queue_score = anomaly x log1p(n_reviews); "
+                             "anomaly_score ranks pure weirdness")
     args = parser.parse_args()
 
     spark = get_spark("yelp-anomaly")
@@ -242,10 +331,10 @@ def main() -> None:
 
         top = (
             spark.read.parquet(str(out))
-            .orderBy(F.desc("anomaly_score"))
+            .orderBy(F.desc(args.rank_by))
             .limit(args.top)
             .select(
-                "user_id", "n_reviews", "anomaly_score",
+                "user_id", "n_reviews", "queue_score", "anomaly_score",
                 *[F.round(F.col(c), 4).alias(c) for c in SIGNALS],
                 "max_reviews_per_day", "duplicate_reviews", "avg_text_len",
             )

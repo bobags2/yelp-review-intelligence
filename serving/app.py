@@ -23,6 +23,7 @@ and each one thinking it owns them.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -144,6 +145,15 @@ class AnomalyScorer:
         self.lo: float = cfg["clip"]["low"]
         self.hi: float = cfg["clip"]["high"]
 
+        # The batch job shrinks per-review ratios toward the population mean by
+        # sample size before scaling them, so the service must do the same
+        # arithmetic from the raw signals and n_reviews or the two paths
+        # diverge. Absent block = a scaler written before shrinkage existed.
+        shrink = cfg.get("shrinkage") or {}
+        self.pseudo_count: float = float(shrink.get("pseudo_count", 0.0))
+        self.shrunk_signals: list[str] = list(shrink.get("shrunk_signals", []))
+        self.prior_mean: dict = shrink.get("prior_mean", {})
+
         # Refuse a scaler that cannot reproduce the batch score. Defaulting a
         # missing scale to 1.0 here is what made the served `duplication`
         # component differ from the offline one by the ratio of its true scale,
@@ -156,17 +166,31 @@ class AnomalyScorer:
                 f"`python -m src.anomaly`"
             )
 
-    def score(self, signals: dict[str, float]) -> dict:
+    def score(self, signals: dict[str, float], n_reviews: int) -> dict:
         missing = [s for s in self.signals if s not in signals]
         if missing:
             raise ValueError(f"missing signals: {missing}")
+        if self.shrunk_signals and n_reviews is None:
+            raise ValueError("n_reviews is required to reproduce the batch shrinkage")
+
         components, total = {}, 0.0
+        n = float(n_reviews or 0)
+        k = self.pseudo_count
         for s in self.signals:
-            z = (float(signals[s]) - self.median[s]) / self.scale[s]
+            raw = float(signals[s])
+            if s in self.shrunk_signals:
+                raw = (n * raw + k * float(self.prior_mean[s])) / (n + k)
+            z = (raw - self.median[s]) / self.scale[s]
             z = max(self.lo, min(self.hi, z))
             components[s] = round(z, 4)
             total += z
-        return {"anomaly_score": round(total, 4), "components": components}
+        # queue_score is what the batch job ranks on; anomaly_score is retained
+        # so a caller can still see raw weirdness separately from harm.
+        return {
+            "anomaly_score": round(total, 4),
+            "queue_score": round(total * math.log1p(n), 4),
+            "components": components,
+        }
 
 
 app = FastAPI(title="Yelp Content & Contributor Intelligence", version="1.0")
@@ -204,6 +228,9 @@ class ScoreResponse(BaseModel):
 
 
 class AnomalyRequest(BaseModel):
+    # Required: the batch scorer shrinks ratios by sample size, so an account's
+    # score is not defined by its signals alone.
+    n_reviews: int = Field(..., ge=1)
     burstiness: float
     duplication: float
     rating_extremity: float
@@ -275,6 +302,7 @@ def anomaly(req: AnomalyRequest) -> dict:
     if ANOMALY is None:
         raise HTTPException(503, "anomaly head not loaded; run `python -m src.anomaly`")
     try:
-        return ANOMALY.score(req.model_dump())
+        payload = req.model_dump()
+        return ANOMALY.score(payload, n_reviews=payload.pop("n_reviews"))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

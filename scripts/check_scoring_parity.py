@@ -62,7 +62,10 @@ def main() -> int:
     # by robust_zscore; tolerate their absence rather than refusing to run.
     available = set(dataset.schema.names)
     z_cols = [f"z_{s}" for s in SIGNALS if f"z_{s}" in available]
-    cols = ["user_id", *SIGNALS, "anomaly_score", *z_cols]
+    # n_reviews is part of the input now: the batch job shrinks per-review
+    # ratios by sample size, so an account's score is not a function of its
+    # signals alone.
+    cols = ["user_id", "n_reviews", *SIGNALS, "anomaly_score", *z_cols]
     table = dataset.to_table(columns=cols)
     n_total = table.num_rows
     if n_total == 0:
@@ -81,11 +84,12 @@ def main() -> int:
 
     for row in rows:
         signals = {s: row[s] for s in SIGNALS}
-        if any(v is None for v in signals.values()) or row["anomaly_score"] is None:
+        if (any(v is None for v in signals.values())
+                or row["anomaly_score"] is None or row["n_reviews"] is None):
             skipped += 1
             continue
 
-        served = scorer.score(signals)
+        served = scorer.score(signals, n_reviews=row["n_reviews"])
         expected = round(float(row["anomaly_score"]), ROUND_DP)
         delta = abs(served["anomaly_score"] - expected)
         checked += 1
