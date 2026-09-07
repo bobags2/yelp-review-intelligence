@@ -181,4 +181,4 @@ The ranker also weights by expected harm rather than by weirdness. A 3-review bu
 
 ---
 
-*Code, commits, and every number above: [github.com/bobags2/yelp-cci](https://github.com/bobags2/yelp-cci)*
+*Code, commits, and every number above: [github.com/bobags2/yelp-review-intelligence](https://github.com/bobags2/yelp-review-intelligence)*
