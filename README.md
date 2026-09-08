@@ -1,5 +1,8 @@
 # Yelp Content & Contributor Intelligence
 
+**[Read the writeup →](WRITEUP.md)** — seven results, five bugs that produced
+plausible numbers instead of errors, and what measuring them changed.
+
 An end-to-end machine learning pipeline over the [Yelp Open Dataset](https://www.yelp.com/dataset)
 (~7M reviews, 150,346 businesses, 11 metro areas): Spark ingestion and feature
 engineering, a supervised multi-label content classifier, and an unsupervised
@@ -43,8 +46,13 @@ for a label appearing in 2% of rows is 0.02 for a model that has learned
 nothing. The `lift` column is AP divided by that floor. A headline AP without
 the floor beside it is not a result.
 
-**Median/MAD scaling in the anomaly ranker, not mean/stdev.** The tail being
-hunted is exactly what would inflate a standard deviation and hide itself.
+**Rank normalisation in the anomaly ranker, not median/MAD.** MAD cannot
+scale a zero-inflated signal: most accounts have zero duplicate reviews, so
+`duplication`'s MAD came out at 0.0010 and every account with meaningful
+duplication saturated the clip. A percentile rank is defined on zero-inflated
+data, needs no scale estimate, and is commensurate across signals by
+construction. Both the batch job and the serving path interpolate the same
+persisted breakpoint table, so parity is structural rather than agreed.
 
 **Explicit Spark schemas.** Inference costs an extra full pass over 8.65 GB and,
 on `business.attributes`, produces a different struct depending on which rows
@@ -299,8 +307,8 @@ is the sustainable throughput, and it is the only capacity claim worth making.
 ## S3 + Athena
 
 ```bash
-python scripts/land_s3_athena.py --bucket my-yelp-cci --dry-run
-make s3 BUCKET=my-yelp-cci
+python scripts/land_s3_athena.py --bucket my-yelp-review-intelligence --dry-run
+make s3 BUCKET=my-yelp-review-intelligence
 ```
 
 Uploads the Parquet layer preserving the `year=NNNN/` Hive layout — flatten it
