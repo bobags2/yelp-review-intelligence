@@ -1,0 +1,63 @@
+{
+  "provider": "CPUExecutionProvider",
+  "n_features": 20000,
+  "n_labels": 50,
+  "points": [
+    {
+      "batch_size": 1,
+      "batch_p50_ms": 0.266,
+      "batch_p95_ms": 0.342,
+      "per_review_ms": 0.2663,
+      "throughput_per_sec": 3654.5
+    },
+    {
+      "batch_size": 2,
+      "batch_p50_ms": 0.371,
+      "batch_p95_ms": 0.469,
+      "per_review_ms": 0.1854,
+      "throughput_per_sec": 5240.5
+    },
+    {
+      "batch_size": 4,
+      "batch_p50_ms": 3.135,
+      "batch_p95_ms": 3.301,
+      "per_review_ms": 0.7837,
+      "throughput_per_sec": 1282.3
+    },
+    {
+      "batch_size": 8,
+      "batch_p50_ms": 3.448,
+      "batch_p95_ms": 4.747,
+      "per_review_ms": 0.431,
+      "throughput_per_sec": 2203.1
+    },
+    {
+      "batch_size": 16,
+      "batch_p50_ms": 5.319,
+      "batch_p95_ms": 5.702,
+      "per_review_ms": 0.3324,
+      "throughput_per_sec": 3002.6
+    },
+    {
+      "batch_size": 32,
+      "batch_p50_ms": 6.302,
+      "batch_p95_ms": 6.761,
+      "per_review_ms": 0.1969,
+      "throughput_per_sec": 5156.8
+    },
+    {
+      "batch_size": 64,
+      "batch_p50_ms": 10.461,
+      "batch_p95_ms": 10.953,
+      "per_review_ms": 0.1635,
+      "throughput_per_sec": 6281.0
+    },
+    {
+      "batch_size": 128,
+      "batch_p50_ms": 17.238,
+      "batch_p95_ms": 17.724,
+      "per_review_ms": 0.1347,
+      "throughput_per_sec": 7560.4
+    }
+  ]
+}

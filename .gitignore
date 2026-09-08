@@ -4,6 +4,17 @@ data/
 # (~174MB of model weights) was not covered.
 artifacts/*
 !artifacts/.gitkeep
+# The small metrics artifacts are tracked deliberately. The writeup's argument
+# is that its numbers are checkable, which they are not if the JSON that
+# produced them is absent from the repo. ~180KB total. Model weights, the ONNX
+# graphs and the queue CSV stay excluded.
+!artifacts/baseline_metrics.json
+!artifacts/vocab_sweep.json
+!artifacts/linear_serving_bench.json
+!artifacts/encoder_history.json
+!artifacts/encoder_eval.json
+!artifacts/encoder_eval_random_init.json
+!artifacts/anomaly_scaler.json
 __pycache__/
 *.pyc
 .venv/

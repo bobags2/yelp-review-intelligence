@@ -1,0 +1,47 @@
+{
+  "floor": null,
+  "points": [
+    {
+      "k": 256,
+      "macro_average_precision": 0.3908623525443364,
+      "micro_average_precision": 0.42868340437054636,
+      "macro_lift": 8.078929268332395,
+      "fit_seconds": 55.841023206710815
+    },
+    {
+      "k": 1000,
+      "macro_average_precision": 0.4788889552854043,
+      "micro_average_precision": 0.504744176793304,
+      "macro_lift": 9.898395104955824,
+      "fit_seconds": 69.09032130241394
+    },
+    {
+      "k": 5000,
+      "macro_average_precision": 0.5516449545487976,
+      "micro_average_precision": 0.5703246893617754,
+      "macro_lift": 11.402225207981989,
+      "fit_seconds": 99.41696047782898
+    },
+    {
+      "k": 20000,
+      "macro_average_precision": 0.5761886497260852,
+      "micro_average_precision": 0.5944942421295154,
+      "macro_lift": 11.90953110743754,
+      "fit_seconds": 223.89730048179626
+    },
+    {
+      "k": 100000,
+      "macro_average_precision": 0.5734801223809082,
+      "micro_average_precision": 0.5883038138620486,
+      "macro_lift": 11.853547202360504,
+      "fit_seconds": 641.506097316742
+    },
+    {
+      "k": 200000,
+      "macro_average_precision": 0.5679914354238602,
+      "micro_average_precision": 0.5794565249261602,
+      "macro_lift": 11.740098789093382,
+      "fit_seconds": 914.9646310806274
+    }
+  ]
+}

@@ -1,0 +1,309 @@
+{
+  "macro_ap": 0.6335169236866731,
+  "prevalence_floor": 0.048436042657122015,
+  "eval_rows": 60040,
+  "model_name": "distilbert-base-uncased",
+  "random_init": false,
+  "per_label": [
+    {
+      "category": "Home Services",
+      "prevalence": 0.03925716131925583,
+      "average_precision": 0.8923468005277364,
+      "lift": 22.73080300612658
+    },
+    {
+      "category": "Beauty & Spas",
+      "prevalence": 0.058294471353292465,
+      "average_precision": 0.9553111881034133,
+      "lift": 16.38768078560605
+    },
+    {
+      "category": "Health & Medical",
+      "prevalence": 0.03171219304203987,
+      "average_precision": 0.8876557790959998,
+      "lift": 27.99099317790044
+    },
+    {
+      "category": "Local Services",
+      "prevalence": 0.03507661446928978,
+      "average_precision": 0.7448975400635603,
+      "lift": 21.236300918258
+    },
+    {
+      "category": "Bars",
+      "prevalence": 0.24497002363204956,
+      "average_precision": 0.7315819452008919,
+      "lift": 2.9864141512258837
+    },
+    {
+      "category": "Automotive",
+      "prevalence": 0.03564290329813957,
+      "average_precision": 0.9397752540478359,
+      "lift": 26.366405850470905
+    },
+    {
+      "category": "Sandwiches",
+      "prevalence": 0.11219187080860138,
+      "average_precision": 0.46421890924874576,
+      "lift": 4.137723222752032
+    },
+    {
+      "category": "American (Traditional)",
+      "prevalence": 0.15826116502285004,
+      "average_precision": 0.48685198380698863,
+      "lift": 3.0762567919722823
+    },
+    {
+      "category": "Active Life",
+      "prevalence": 0.033594269305467606,
+      "average_precision": 0.8091120826331539,
+      "lift": 24.084824565643032
+    },
+    {
+      "category": "Pizza",
+      "prevalence": 0.08196202665567398,
+      "average_precision": 0.7792375411459898,
+      "lift": 9.50729957446758
+    },
+    {
+      "category": "Coffee & Tea",
+      "prevalence": 0.07091938704252243,
+      "average_precision": 0.6731821317083638,
+      "lift": 9.492215877510782
+    },
+    {
+      "category": "Fast Food",
+      "prevalence": 0.04072285071015358,
+      "average_precision": 0.5632417505220639,
+      "lift": 13.83109828265605
+    },
+    {
+      "category": "Breakfast & Brunch",
+      "prevalence": 0.13009659945964813,
+      "average_precision": 0.5855262498007022,
+      "lift": 4.50070372502176
+    },
+    {
+      "category": "American (New)",
+      "prevalence": 0.15434710681438446,
+      "average_precision": 0.5020811252869384,
+      "lift": 3.252935125572089
+    },
+    {
+      "category": "Hotels & Travel",
+      "prevalence": 0.04400399699807167,
+      "average_precision": 0.8802710212737289,
+      "lift": 20.004342362633647
+    },
+    {
+      "category": "Home & Garden",
+      "prevalence": 0.01980346441268921,
+      "average_precision": 0.7246011700533516,
+      "lift": 36.58961659198672
+    },
+    {
+      "category": "Fashion",
+      "prevalence": 0.02288474328815937,
+      "average_precision": 0.6877792028675996,
+      "lift": 30.05404929420635
+    },
+    {
+      "category": "Burgers",
+      "prevalence": 0.06607262045145035,
+      "average_precision": 0.5216455981407275,
+      "lift": 7.895034199892657
+    },
+    {
+      "category": "Arts & Entertainment",
+      "prevalence": 0.05378081277012825,
+      "average_precision": 0.5811845646372922,
+      "lift": 10.806541119439952
+    },
+    {
+      "category": "Auto Repair",
+      "prevalence": 0.02051965333521366,
+      "average_precision": 0.8713706058399846,
+      "lift": 42.46517188205273
+    },
+    {
+      "category": "Hair Salons",
+      "prevalence": 0.01703864149749279,
+      "average_precision": 0.8781401775596368,
+      "lift": 51.53815682364429
+    },
+    {
+      "category": "Nail Salons",
+      "prevalence": 0.022851431742310524,
+      "average_precision": 0.9273359535573005,
+      "lift": 40.581087610379065
+    },
+    {
+      "category": "Mexican",
+      "prevalence": 0.07671552151441574,
+      "average_precision": 0.8535060570062452,
+      "lift": 11.12559805574497
+    },
+    {
+      "category": "Italian",
+      "prevalence": 0.07106928527355194,
+      "average_precision": 0.6774008809045073,
+      "lift": 9.53155611875273
+    },
+    {
+      "category": "Specialty Food",
+      "prevalence": 0.047751497477293015,
+      "average_precision": 0.36720196407417033,
+      "lift": 7.689852328689455
+    },
+    {
+      "category": "Doctors",
+      "prevalence": 0.009810126386582851,
+      "average_precision": 0.6748960948693112,
+      "lift": 68.79586136549224
+    },
+    {
+      "category": "Pets",
+      "prevalence": 0.011825449764728546,
+      "average_precision": 0.8458367309032085,
+      "lift": 71.52681274128476
+    },
+    {
+      "category": "Real Estate",
+      "prevalence": 0.008910725824534893,
+      "average_precision": 0.7767529828292093,
+      "lift": 87.17056254727184
+    },
+    {
+      "category": "Seafood",
+      "prevalence": 0.10671219229698181,
+      "average_precision": 0.6093348067674366,
+      "lift": 5.710076736795433
+    },
+    {
+      "category": "Fitness & Instruction",
+      "prevalence": 0.009310459718108177,
+      "average_precision": 0.8906213960864408,
+      "lift": 95.65815470467543
+    },
+    {
+      "category": "Professional Services",
+      "prevalence": 0.008994003757834435,
+      "average_precision": 0.4365078161567527,
+      "lift": 48.53320366655645
+    },
+    {
+      "category": "Hair Removal",
+      "prevalence": 0.01835443079471588,
+      "average_precision": 0.5739133052433416,
+      "lift": 31.268379371839057
+    },
+    {
+      "category": "Desserts",
+      "prevalence": 0.06225849315524101,
+      "average_precision": 0.3467098432291267,
+      "lift": 5.568876239336674
+    },
+    {
+      "category": "Chinese",
+      "prevalence": 0.0383077934384346,
+      "average_precision": 0.735878631854915,
+      "lift": 19.20963244822659
+    },
+    {
+      "category": "Bakeries",
+      "prevalence": 0.03840772807598114,
+      "average_precision": 0.5538608390201155,
+      "lift": 14.420557183815328
+    },
+    {
+      "category": "Grocery",
+      "prevalence": 0.02410059981048107,
+      "average_precision": 0.6367534323911982,
+      "lift": 26.420646680929554
+    },
+    {
+      "category": "Salad",
+      "prevalence": 0.04953364282846451,
+      "average_precision": 0.219910071123888,
+      "lift": 4.439610304564894
+    },
+    {
+      "category": "Hotels",
+      "prevalence": 0.026532310992479324,
+      "average_precision": 0.9145622503160644,
+      "lift": 34.469754654063124
+    },
+    {
+      "category": "Chicken Wings",
+      "prevalence": 0.031429048627614975,
+      "average_precision": 0.3727602220738854,
+      "lift": 11.860372437311435
+    },
+    {
+      "category": "Cafes",
+      "prevalence": 0.046952031552791595,
+      "average_precision": 0.2874666721927302,
+      "lift": 6.12256089216311
+    },
+    {
+      "category": "Ice Cream & Frozen Yogurt",
+      "prevalence": 0.03049633651971817,
+      "average_precision": 0.6951846751666505,
+      "lift": 22.795678251948768
+    },
+    {
+      "category": "Caterers",
+      "prevalence": 0.043221186846494675,
+      "average_precision": 0.21038850728960184,
+      "lift": 4.867717030465228
+    },
+    {
+      "category": "Pet Services",
+      "prevalence": 0.007728181313723326,
+      "average_precision": 0.845442070995977,
+      "lift": 109.39728723686676
+    },
+    {
+      "category": "Dentists",
+      "prevalence": 0.006545636337250471,
+      "average_precision": 0.9489109110830979,
+      "lift": 144.96847398670073
+    },
+    {
+      "category": "Skin Care",
+      "prevalence": 0.011359093710780144,
+      "average_precision": 0.5126835381764211,
+      "lift": 45.134193909314085
+    },
+    {
+      "category": "Venues & Event Spaces",
+      "prevalence": 0.031628914177417755,
+      "average_precision": 0.21001567709954475,
+      "lift": 6.639990102774083
+    },
+    {
+      "category": "Tires",
+      "prevalence": 0.007045303005725145,
+      "average_precision": 0.6271824940752546,
+      "lift": 89.02136552048853
+    },
+    {
+      "category": "Wine & Spirits",
+      "prevalence": 0.041555628180503845,
+      "average_precision": 0.17941671409262827,
+      "lift": 4.317506964719716
+    },
+    {
+      "category": "Beer",
+      "prevalence": 0.041555628180503845,
+      "average_precision": 0.17982564187211691,
+      "lift": 4.327347455584453
+    },
+    {
+      "category": "Delis",
+      "prevalence": 0.019686875864863396,
+      "average_precision": 0.4055733823178145,
+      "lift": 20.601205854183846
+    }
+  ]
+}

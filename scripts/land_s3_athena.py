@@ -18,9 +18,9 @@ about four cents. Cheap, but not zero, and a bad query in a loop is how people
 get surprised.
 
 Usage:
-    python scripts/land_s3_athena.py --bucket my-yelp-cci --dry-run
-    python scripts/land_s3_athena.py --bucket my-yelp-cci
-    python scripts/land_s3_athena.py --bucket my-yelp-cci --sql-only
+    python scripts/land_s3_athena.py --bucket my-yelp-review-intelligence --dry-run
+    python scripts/land_s3_athena.py --bucket my-yelp-review-intelligence
+    python scripts/land_s3_athena.py --bucket my-yelp-review-intelligence --sql-only
 """
 
 from __future__ import annotations
