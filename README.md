@@ -1,5 +1,7 @@
 # Yelp Content & Contributor Intelligence
 
+**Site & API spec:** <https://bobags2.github.io/yelp-review-intelligence/>
+
 **[Read the writeup →](WRITEUP.md)** — seven results, five bugs that produced
 plausible numbers instead of errors, and what measuring them changed.
 
