@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jadon Yeo — Review Intelligence</title>
+<meta name="description" content="An end-to-end machine learning pipeline over the Yelp Open Dataset, with the specification and measurement work around it.">
+<meta property="og:title" content="Jadon Yeo — Review Intelligence">
+<meta property="og:description" content="Multi-label content classification and a harm-ranked enforcement queue over 7M reviews. Specification, measurement and written analysis.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◧</text></svg>">
+<style>
+  :root {
+    --bg:        #ffffff;
+    --bg-soft:   #f7f8fa;
+    --text:      #16181d;
+    --text-mute: #5b6472;
+    --border:    #e2e5ea;
+    --border-str:#cbd1da;
+    --accent:    #1d4ed8;
+    --accent-bg: #eef2ff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0f1115;
+      --bg-soft:   #161920;
+      --text:      #e8eaed;
+      --text-mute: #9aa4b2;
+      --border:    #262b34;
+      --border-str:#39404c;
+      --accent:    #7ba2ff;
+      --accent-bg: #172038;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 0 16px;
+  }
+
+  /* ---------- header ---------- */
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 40px 0 26px;
+  }
+  .name {
+    font-size: 15px;
+    font-weight: 620;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
+  .role {
+    margin: 0;
+    color: var(--text-mute);
+    font-size: 15px;
+  }
+  .links {
+    margin-top: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    font-size: 14px;
+  }
+  .links a { color: var(--text-mute); text-decoration: none; border-bottom: 1px solid var(--border-str); }
+  .links a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ---------- intro ---------- */
+
+  h1 {
+    font-size: 30px;
+    line-height: 1.22;
+    letter-spacing: -0.021em;
+    margin: 44px 0 16px;
+    font-weight: 660;
+  }
+  .lead { font-size: 17px; margin: 0 0 14px; }
+  .lead-sub { color: var(--text-mute); margin: 0; }
+
+  h2 {
+    font-size: 13px;
+    font-weight: 660;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    margin: 52px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ---------- cards ---------- */
+
+  .cards { display: grid; gap: 12px; }
+  @media (min-width: 640px) { .cards { grid-template-columns: 1fr 1fr; } }
+
+  .card {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 18px 18px 16px;
+    text-decoration: none;
+    color: inherit;
+    background: var(--bg-soft);
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .card-kicker {
+    font-size: 11px;
+    font-weight: 660;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 7px;
+  }
+  .card-title { font-size: 16.5px; font-weight: 640; margin: 0 0 6px; }
+  .card-desc  { font-size: 14.5px; color: var(--text-mute); margin: 0; line-height: 1.55; }
+
+  /* ---------- results table ---------- */
+
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-mute); font-weight: 620; }
+  td.num { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+
+  .note { font-size: 13.5px; color: var(--text-mute); margin-top: 14px; }
+
+  /* ---------- stack ---------- */
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 0; margin: 0; list-style: none; }
+  .chips li {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-mute);
+    background: var(--bg-soft);
+  }
+
+  /* ---------- footer ---------- */
+
+  footer {
+    margin-top: 64px;
+    border-top: 1px solid var(--border);
+    padding: 22px 0 56px;
+    font-size: 13.5px;
+    color: var(--text-mute);
+  }
+  footer a { color: var(--text-mute); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <p class="name">Jadon Yeo</p>
+    <p class="role">Machine learning &amp; data engineering · API product specification · Ladysmith, BC</p>
+    <nav class="links">
+      <a href="https://github.com/bobags2/yelp-review-intelligence">GitHub</a>
+      <a href="https://www.linkedin.com/in/jadon-yeo-b80368296">LinkedIn</a>
+      <a href="mailto:jadonyeo@gmail.com">jadonyeo@gmail.com</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>Review Intelligence — classification and enforcement triage over 7M reviews</h1>
+
+  <p class="lead">
+    An end-to-end pipeline over the <a href="https://www.yelp.com/dataset">Yelp Open Dataset</a> —
+    6,990,280 reviews across 150,346 businesses and 1,987,897 users. Spark ingestion, a multi-label
+    content classifier, and an unsupervised reviewer-anomaly ranker that produces candidates for a
+    human enforcement queue. Served through ONNX Runtime behind a documented API.
+  </p>
+  <p class="lead-sub">
+    The dataset carries no ground-truth labels for fraudulent reviews, so the scope was split by what
+    the data honestly supports: supervised classification against labels that exist, and unsupervised
+    ranking that feeds human adjudication rather than pretending to be a classifier.
+  </p>
+
+  <h2>Artifacts</h2>
+
+  <div class="cards">
+
+    <a class="card" href="https://github.com/bobags2/yelp-review-intelligence/blob/main/WRITEUP.md">
+      <span class="card-kicker">Written analysis</span>
+      <p class="card-title">Every bug in this project produced a plausible number</p>
+      <p class="card-desc">Seven results, five bugs that returned numbers instead of errors, and what
+        measuring them changed — including two conclusions the evidence overturned after they were
+        published.</p>
+    </a>
+
+    <a class="card" href="api.html">
+      <span class="card-kicker">Interface specification</span>
+      <p class="card-title">Review Scoring API — OpenAPI 3.1</p>
+      <p class="card-desc">Rendered live. Request and response schemas, an RFC 9457 error contract,
+        batch limits, worked examples and throughput guidance for integrating clients.</p>
+    </a>
+
+    <a class="card" href="functional-spec.pdf">
+      <span class="card-kicker">Functional specification · PDF</span>
+      <p class="card-title">User stories, acceptance criteria and open questions</p>
+      <p class="card-desc">Ten user stories with testable acceptance criteria, non-functional
+        requirements traced to recorded runs, an open-questions register, and an honest
+        implemented-versus-specified status table.</p>
+    </a>
+
+    <a class="card" href="https://github.com/bobags2/yelp-review-intelligence">
+      <span class="card-kicker">Source</span>
+      <p class="card-title">Pipeline, serving layer and streaming harness</p>
+      <p class="card-desc">Spark ingestion and feature engineering, model training and ONNX export
+        with a parity check, a FastAPI scoring service, and a Kafka replay harness for measuring
+        sustainable throughput.</p>
+    </a>
+
+  </div>
+
+  <h2>Selected measured results</h2>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Result</th><th>Measurement</th><th>How it was established</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Content classifier</td>
+          <td class="num">macro AP 0.634<br>vs 0.048 floor</td>
+          <td>Grouped split holding out whole businesses, because reviews name the business and a random split leaks it</td>
+        </tr>
+        <tr>
+          <td>Representation vs model class</td>
+          <td class="num">94% / 6%</td>
+          <td>Counterfactual: the same linear model run on the gradient-boosted model's feature matrix</td>
+        </tr>
+        <tr>
+          <td>Lexical ceiling</td>
+          <td class="num">0.576</td>
+          <td>Vocabulary sweep — 5,000 selected terms reach 95.7% of peak; the curve plateaus by 20,000</td>
+        </tr>
+        <tr>
+          <td>Transformer margin</td>
+          <td class="num">+0.014 architecture<br>+0.043 transfer</td>
+          <td>Random-initialisation control, corroborated by a per-label gradient (p=0.004 transfer, p=0.86 architecture)</td>
+        </tr>
+        <tr>
+          <td>Serving cost</td>
+          <td class="num">64×</td>
+          <td>Both models exported to ONNX and benchmarked on one box, same provider, same corpus</td>
+        </tr>
+        <tr>
+          <td>Batch/serving parity</td>
+          <td class="num">1e-06</td>
+          <td>500 sampled accounts scored through both paths, so an enforcement decision stays auditable</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="note">
+    Every figure traces to a recorded run. Where a number is arithmetic derived from measurements
+    rather than directly observed, the writeup says so.
+  </p>
+
+  <h2>Stack</h2>
+  <ul class="chips">
+    <li>Apache Spark</li><li>PyTorch</li><li>scikit-learn</li><li>XGBoost</li>
+    <li>ONNX Runtime</li><li>FastAPI</li><li>Apache Kafka</li><li>Docker</li>
+    <li>Parquet</li><li>OpenAPI 3.1</li><li>Python</li><li>AWS S3 / Athena</li>
+  </ul>
+
+</main>
+
+<footer class="wrap">
+  Built and measured by Jadon Yeo · <a href="mailto:jadonyeo@gmail.com">jadonyeo@gmail.com</a>
+</footer>
+
+</body>
+</html>

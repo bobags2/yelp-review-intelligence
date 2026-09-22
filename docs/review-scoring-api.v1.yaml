@@ -1,0 +1,644 @@
+openapi: 3.1.0
+
+info:
+  title: Review Scoring API
+  version: 1.0.0
+  summary: Classifies review text by business category and scores reviewer accounts for enforcement triage.
+  description: |
+    The Review Scoring API exposes two independent scoring capabilities over a shared
+    transport and error contract.
+
+    **Content classification** (`/v1/reviews:score`) accepts review text and returns a
+    ranked set of business-category probabilities. It is a multi-label classifier: a
+    single review may legitimately score highly against several categories, and the
+    probabilities are calibrated independently rather than summing to 1.
+
+    **Reviewer anomaly scoring** (`/v1/reviewers:score`) accepts pre-computed behavioural
+    aggregates for one reviewer account and returns a queue score with its per-signal
+    contributions. It does **not** return a fraud determination. The score orders a
+    human review queue; the adjudication is made by a person.
+
+    ### Design notes for integrators
+
+    - **Batch, don't loop.** `/v1/reviews:score` accepts up to 64 reviews per call.
+      One call of 8 costs materially less per review than 8 calls of 1. See
+      `x-throughput-guidance` on the operation.
+    - **Scores are not decisions.** Neither endpoint applies a threshold. Threshold
+      selection is a policy decision owned by the consuming team, because the cost of
+      a false positive differs by downstream action.
+    - **Anomaly scores are reproducible.** Component scaling is read from a versioned
+      breakpoint table published with each model release, not recomputed per request.
+      The same inputs return the same score for the lifetime of a model version, so an
+      enforcement decision remains auditable after the fact. The table version is
+      returned in `modelVersion`.
+    - **Every error is `application/problem+json`** per RFC 9457. Clients should branch
+      on `type`, never on the human-readable `detail` string.
+
+  contact:
+    name: Jadon Yeo
+    email: jadonyeo@gmail.com
+    url: https://github.com/bobags2/yelp-review-intelligence
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: https://api.example.com
+    description: Production
+  - url: https://sandbox.api.example.com
+    description: Sandbox — same contract, synthetic model, no rate limit
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Content
+    description: Classification of review text.
+  - name: Reviewers
+    description: Behavioural scoring of reviewer accounts for enforcement triage.
+  - name: Operations
+    description: Liveness and service telemetry. Not for business use.
+
+security:
+  - apiKey: []
+
+paths:
+
+  /v1/reviews:score:
+    post:
+      tags: [Content]
+      operationId: scoreReviews
+      summary: Score a batch of reviews for business category
+      description: |
+        Returns, for each submitted review and in submission order, the `topK`
+        highest-scoring business categories with their probabilities.
+
+        Results are positionally aligned with the request array. A review that cannot be
+        scored still occupies its position, with an empty `predictions` array and a
+        populated `skippedReason` — the call does not fail because one item was
+        unusable. This keeps the response index-addressable, which matters when the
+        caller is reconciling against its own batch.
+      x-throughput-guidance: |
+        Cost per review is not flat across batch sizes. Two effects run in opposite
+        directions: the model pads each batch to its longest member, so per-review model
+        cost rises with batch size on ragged input; per-call transport and framing cost
+        falls. Measured on the reference deployment, the sum minimises between 8 and 16.
+        Callers with latency budgets under 200 ms should send 8.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScoreReviewsRequest'
+            examples:
+              twoReviews:
+                summary: Two reviews, top 3 categories each
+                value:
+                  reviews:
+                    - id: "rev_8812"
+                      text: "Cleaning was quick and the hygienist explained everything before starting."
+                    - id: "rev_8813"
+                      text: "Brakes and an alignment, fair price, done same day."
+                  topK: 3
+              withThreshold:
+                summary: Suppress low-confidence labels
+                value:
+                  reviews:
+                    - id: "rev_9001"
+                      text: "Good."
+                  topK: 5
+                  minProbability: 0.25
+      responses:
+        '200':
+          description: Scoring completed. Individual items may still be unscored — check `skippedReason`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            RateLimit:
+              $ref: '#/components/headers/RateLimit'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreReviewsResponse'
+              examples:
+                mixed:
+                  summary: One scored, one skipped as too short
+                  value:
+                    modelVersion: "clf-2026.03.1"
+                    results:
+                      - id: "rev_8812"
+                        predictions:
+                          - category: "Dentists"
+                            probability: 0.9412
+                          - category: "Health & Medical"
+                            probability: 0.8033
+                          - category: "General Dentistry"
+                            probability: 0.6120
+                      - id: "rev_9001"
+                        predictions: []
+                        skippedReason: "TEXT_TOO_SHORT"
+                    latency:
+                      totalMs: 61.4
+                      tokenizeMs: 9.2
+                      inferenceMs: 51.1
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/reviewers:score:
+    post:
+      tags: [Reviewers]
+      operationId: scoreReviewer
+      summary: Score one reviewer account for enforcement triage
+      description: |
+        Accepts pre-computed behavioural aggregates for a single reviewer and returns a
+        queue score with the contribution of each signal.
+
+        The caller computes the aggregates; this service does not read the review
+        history. That split is deliberate — it keeps the scoring service stateless and
+        lets the aggregation run wherever the data already lives.
+
+        **`components` is not optional context.** A queue entry is actioned by a human,
+        and a score without its reasons is not actionable. Consumers displaying a queue
+        are expected to surface the component breakdown alongside the total.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScoreReviewerRequest'
+            examples:
+              highDuplication:
+                summary: Account with heavy text reuse
+                value:
+                  reviewerId: "usr_4471"
+                  reviewCount: 24
+                  signals:
+                    burstiness: 0.71
+                    duplication: 0.75
+                    ratingExtremity: 1.0
+                    consensusDeviation: 1.94
+                    precocity: 1.41
+      responses:
+        '200':
+          description: Score computed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            RateLimit:
+              $ref: '#/components/headers/RateLimit'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreReviewerResponse'
+              examples:
+                highDuplication:
+                  summary: Score dominated by duplication and extremity
+                  value:
+                    reviewerId: "usr_4471"
+                    modelVersion: "anom-2026.03.1"
+                    anomalyScore: 12.95
+                    queueScore: 41.68
+                    components:
+                      burstiness: 2.11
+                      duplication: 4.87
+                      ratingExtremity: 2.94
+                      consensusDeviation: 1.62
+                      precocity: 1.41
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/health:
+    get:
+      tags: [Operations]
+      operationId: getHealth
+      summary: Liveness and model-load status
+      description: |
+        Returns `ok` only when every declared scoring capability has loaded. A service
+        that is running but has not loaded a model returns `degraded` with the
+        unavailable capabilities named, so a load balancer can drain it rather than
+        route traffic that will fail.
+      security: []
+      responses:
+        '200':
+          description: Service reachable. Inspect `status` — a 200 does not imply all capabilities are available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                degraded:
+                  summary: Classification up, anomaly model not loaded
+                  value:
+                    status: "degraded"
+                    capabilities:
+                      contentClassification: "ok"
+                      reviewerAnomaly: "unavailable"
+                    unavailableReason: "anomaly breakpoint table not found"
+
+  /v1/metrics:
+    get:
+      tags: [Operations]
+      operationId: getMetrics
+      summary: Rolling latency and request counters
+      description: |
+        Percentiles over a rolling window of the most recent requests, not since start.
+        Latency is split into tokenisation and inference because those are optimised
+        separately and a single total cannot tell an operator which half is the problem.
+
+        Mean is reported but should not be used for alerting; alert on `p95` or `p99`.
+      security: []
+      responses:
+        '200':
+          description: Current window telemetry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+components:
+
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Per-client key issued at onboarding. Keys are scoped to an environment; a
+        sandbox key returns `401` against production.
+
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: |
+        Client-supplied correlation id, echoed on the response and written to the
+        service log. Supply one — it is the only way to correlate a client-side failure
+        with a server-side log line after the fact. Generated if absent.
+      schema:
+        type: string
+        format: uuid
+
+  headers:
+    XRequestId:
+      description: Correlation id for this request, echoed from the request or generated.
+      schema:
+        type: string
+        format: uuid
+    RateLimit:
+      description: Remaining quota in the current window, per RFC 9239 (`limit`, `remaining`, `reset`).
+      schema:
+        type: string
+      example: 'limit=600, remaining=573, reset=41'
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+
+    ScoreReviewsRequest:
+      type: object
+      required: [reviews]
+      additionalProperties: false
+      properties:
+        reviews:
+          type: array
+          description: Reviews to score, in the order results will be returned.
+          minItems: 1
+          maxItems: 64
+          items:
+            $ref: '#/components/schemas/ReviewInput'
+        topK:
+          type: integer
+          description: Number of highest-scoring categories to return per review.
+          minimum: 1
+          maximum: 50
+          default: 5
+        minProbability:
+          type: number
+          description: |
+            Categories scoring below this are omitted. Applied after `topK`, so a
+            review may return fewer than `topK` results, or none. Default returns all
+            `topK` regardless of confidence.
+          format: double
+          minimum: 0
+          maximum: 1
+          default: 0
+
+    ReviewInput:
+      type: object
+      required: [id, text]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: Caller's identifier for this review, echoed in the response for reconciliation. Not stored.
+          minLength: 1
+          maxLength: 128
+        text:
+          type: string
+          description: |
+            Review body. Text beyond the model's context window is truncated rather
+            than rejected; truncation is reported per item in `skippedReason` only when
+            it left too little text to score.
+          minLength: 1
+          maxLength: 20000
+        locale:
+          type: string
+          description: |
+            BCP 47 tag. The current model is trained on English text only; a non-English
+            locale is accepted and scored, but confidence is not calibrated for it.
+          default: en
+
+    ScoreReviewsResponse:
+      type: object
+      required: [modelVersion, results, latency]
+      properties:
+        modelVersion:
+          type: string
+          description: Model release that produced these scores. Record it — scores are only comparable within a version.
+          example: "clf-2026.03.1"
+        results:
+          type: array
+          description: Positionally aligned with `reviews` in the request.
+          items:
+            $ref: '#/components/schemas/ReviewResult'
+        latency:
+          $ref: '#/components/schemas/LatencyBreakdown'
+
+    ReviewResult:
+      type: object
+      required: [id, predictions]
+      properties:
+        id:
+          type: string
+          description: Echoed from the request.
+        predictions:
+          type: array
+          description: Descending by probability. Empty when the item was skipped.
+          items:
+            $ref: '#/components/schemas/CategoryPrediction'
+        skippedReason:
+          type: string
+          description: Present only when `predictions` is empty.
+          enum: [TEXT_TOO_SHORT, TEXT_NOT_SCOREABLE, LOCALE_UNSUPPORTED]
+
+    CategoryPrediction:
+      type: object
+      required: [category, probability]
+      properties:
+        category:
+          type: string
+          description: Business category label from the model's published vocabulary.
+          example: "Dentists"
+        probability:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: |
+            Independent per-label probability. Values across a result do **not** sum to
+            1 — a review about a dental clinic legitimately scores highly on both
+            `Dentists` and `Health & Medical`.
+          example: 0.9412
+
+    ScoreReviewerRequest:
+      type: object
+      required: [reviewerId, reviewCount, signals]
+      additionalProperties: false
+      properties:
+        reviewerId:
+          type: string
+          description: Caller's identifier for the account, echoed in the response.
+          minLength: 1
+          maxLength: 128
+        reviewCount:
+          type: integer
+          description: |
+            Total reviews written by this account. Used to weight the queue score by
+            expected impact and to shrink small-sample ratios toward the population
+            mean — an account with 2 of 3 reviews duplicated is weaker evidence than
+            60 of 200, and the score reflects that.
+          minimum: 1
+        signals:
+          $ref: '#/components/schemas/ReviewerSignals'
+
+    ReviewerSignals:
+      type: object
+      description: |
+        Behavioural aggregates computed by the caller over the account's full history.
+        All five are required — a partial submission is rejected rather than defaulted,
+        because a missing signal silently scored as zero produces a plausible number
+        that is wrong, which is worse than an error.
+      required:
+        [burstiness, duplication, ratingExtremity, consensusDeviation, precocity]
+      additionalProperties: false
+      properties:
+        burstiness:
+          type: number
+          format: double
+          minimum: 0
+          description: Peak single-day review volume divided by distinct active days.
+        duplication:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Share of this account's reviews sharing a normalised text fingerprint with another of its own.
+        ratingExtremity:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Share of this account's reviews at the minimum or maximum star rating.
+        consensusDeviation:
+          type: number
+          format: double
+          minimum: 0
+          description: Mean absolute gap between this account's ratings and the business consensus, over businesses with sufficient reviews to have one.
+        precocity:
+          type: number
+          format: double
+          minimum: 0
+          description: Inverse log of days between account creation and first review. High values indicate an account that began posting immediately.
+
+    ScoreReviewerResponse:
+      type: object
+      required: [reviewerId, modelVersion, anomalyScore, queueScore, components]
+      properties:
+        reviewerId:
+          type: string
+        modelVersion:
+          type: string
+          description: Breakpoint-table release used for scaling. Scores are only comparable within a version.
+          example: "anom-2026.03.1"
+        anomalyScore:
+          type: number
+          format: double
+          description: Sum of the scaled components. Answers "how unusual is this account".
+        queueScore:
+          type: number
+          format: double
+          description: |
+            `anomalyScore` weighted by review volume. Answers "which account costs most
+            if nobody looks", and is the field a queue should sort on. A three-review
+            burst account affects three reviews; a 200-review account with moderate
+            duplication affects sixty.
+        components:
+          type: object
+          description: Per-signal contribution to `anomalyScore`. Surface these with the score — a flag without a reason is not actionable.
+          additionalProperties:
+            type: number
+            format: double
+
+    LatencyBreakdown:
+      type: object
+      required: [totalMs]
+      properties:
+        totalMs: { type: number, format: double }
+        tokenizeMs: { type: number, format: double }
+        inferenceMs: { type: number, format: double }
+
+    HealthResponse:
+      type: object
+      required: [status, capabilities]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, starting]
+        capabilities:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, unavailable]
+        unavailableReason:
+          type: string
+
+    MetricsResponse:
+      type: object
+      properties:
+        counters:
+          type: object
+          properties:
+            requests: { type: integer }
+            reviewsScored: { type: integer }
+            errors: { type: integer }
+        latency:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/LatencyWindow'
+
+    LatencyWindow:
+      type: object
+      properties:
+        n:
+          type: integer
+          description: Observations in the current rolling window.
+        meanMs: { type: number, format: double }
+        p50Ms: { type: number, format: double }
+        p95Ms: { type: number, format: double }
+        p99Ms: { type: number, format: double }
+        maxMs: { type: number, format: double }
+
+    Problem:
+      type: object
+      description: RFC 9457 problem detail. Branch on `type`; `detail` is for humans and may change without notice.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Stable URI identifying the error class.
+          example: "https://api.example.com/problems/batch-too-large"
+        title:
+          type: string
+          example: "Batch too large"
+        status:
+          type: integer
+          example: 413
+        detail:
+          type: string
+          example: "Received 200 reviews; the maximum is 64."
+        instance:
+          type: string
+          format: uri
+          description: Correlation id for this occurrence, matching `X-Request-Id`.
+        errors:
+          type: array
+          description: Present on validation failures — one entry per offending field.
+          items:
+            type: object
+            properties:
+              pointer:
+                type: string
+                description: JSON Pointer to the offending field.
+                example: "/reviews/3/text"
+              detail:
+                type: string
+                example: "Field is required."
+
+  responses:
+    BadRequest:
+      description: Malformed request — unparseable body or unknown field.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing, malformed, or wrong-environment API key.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PayloadTooLarge:
+      description: Batch exceeds the 64-review maximum. Split the batch; do not retry unchanged.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    UnprocessableEntity:
+      description: |
+        Well-formed but semantically invalid — an empty batch, a signal outside its
+        documented range, or a missing required signal. `errors` names each offending
+        field by JSON Pointer.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: "https://api.example.com/problems/validation-failed"
+            title: "Validation failed"
+            status: 422
+            detail: "One or more fields were invalid."
+            instance: "urn:uuid:9f1c0a2e-4f6b-4a0e-9d3c-6b2a1f7e8c40"
+            errors:
+              - pointer: "/signals/duplication"
+                detail: "Must be between 0 and 1; received 1.4."
+    TooManyRequests:
+      description: Rate limit exceeded. Retry after the interval in `Retry-After`; retrying sooner extends the window.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        RateLimit:
+          $ref: '#/components/headers/RateLimit'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: |
+        The requested capability has not loaded. Safe to retry with backoff — this is a
+        startup or model-load state, not a rejection of the request.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

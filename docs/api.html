@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review Scoring API — OpenAPI 3.1 — Jadon Yeo</title>
+<meta name="description" content="Rendered OpenAPI 3.1 specification for the Review Scoring API: schemas, error contracts, batch limits and worked examples.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◧</text></svg>">
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css">
+<style>
+  :root {
+    --bar-bg:     #0f1115;
+    --bar-text:   #e8eaed;
+    --bar-mute:   #9aa4b2;
+    --bar-accent: #7ba2ff;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    /* Swagger UI ships a light theme only; pinning the page light keeps the
+       rendered spec legible rather than half-inverted on a dark OS setting. */
+    background: #fafafa;
+    font-family: var(--sans);
+  }
+
+  .topbar { background: var(--bar-bg); color: var(--bar-text); padding: 14px 0; }
+  .topbar-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 18px;
+  }
+  .back {
+    color: var(--bar-accent);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 560;
+    white-space: nowrap;
+  }
+  .back:hover { text-decoration: underline; }
+  .topbar-title { font-size: 14px; font-weight: 600; margin: 0; }
+  .topbar-sub   { font-size: 13px; color: var(--bar-mute); margin: 0; }
+  .spacer { flex: 1 1 auto; }
+  .raw { color: var(--bar-mute); font-size: 13px; text-decoration: none; white-space: nowrap; }
+  .raw:hover { color: var(--bar-accent); }
+
+  .swagger-ui .topbar { display: none; }
+  .swagger-ui .info { margin: 26px 0; }
+
+  #fallback {
+    display: none;
+    max-width: 700px;
+    margin: 56px auto;
+    padding: 0 16px;
+    font-size: 15px;
+    line-height: 1.6;
+    color: #16181d;
+  }
+  #fallback code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    background: #eceef2;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a class="back" href="index.html">&larr; Back</a>
+    <div>
+      <p class="topbar-title">Review Scoring API — OpenAPI 3.1</p>
+      <p class="topbar-sub">Interface specification · authored by Jadon Yeo</p>
+    </div>
+    <span class="spacer"></span>
+    <a class="raw" href="review-scoring-api.v1.yaml">View raw YAML</a>
+  </div>
+</div>
+
+<div id="swagger-ui"></div>
+
+<div id="fallback">
+  <p><strong>The renderer did not load.</strong> The specification itself is unaffected — read it
+  directly as <a href="review-scoring-api.v1.yaml">review-scoring-api.v1.yaml</a>, or paste it into
+  any OpenAPI viewer.</p>
+  <p>Rendering here depends on Swagger UI loading from a CDN, which a strict corporate network may
+  block. Locally, <code>npx @redocly/cli preview-docs review-scoring-api.v1.yaml</code> renders the
+  same file.</p>
+</div>
+
+<script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" crossorigin></script>
+<script>
+  (function () {
+    function showFallback() {
+      document.getElementById('swagger-ui').style.display = 'none';
+      document.getElementById('fallback').style.display = 'block';
+    }
+
+    if (typeof SwaggerUIBundle !== 'function') { showFallback(); return; }
+
+    try {
+      SwaggerUIBundle({
+        url: 'review-scoring-api.v1.yaml',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        defaultModelsExpandDepth: 1,
+        defaultModelExpandDepth: 3,
+        docExpansion: 'list',
+        tryItOutEnabled: false,
+        supportedSubmitMethods: [],
+        presets: [SwaggerUIBundle.presets.apis],
+        onFailure: showFallback
+      });
+    } catch (e) {
+      showFallback();
+    }
+  })();
+</script>
+
+</body>
+</html>
