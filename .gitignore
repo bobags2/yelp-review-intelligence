@@ -18,3 +18,6 @@ artifacts/*
 __pycache__/
 *.pyc
 .venv/
+# Local AI-assistant context; the content lives in docs/ENGINEERING.md.
+CLAUDE.md
+.claude/

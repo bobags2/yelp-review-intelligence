@@ -1,6 +1,6 @@
-# CLAUDE.md
+# Engineering notes
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Design decisions, invariants, and measurements that are not obvious from the code. Read this before changing anything under `src/`, `serving/`, or `stream/`.
 
 ## Commands
 

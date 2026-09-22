@@ -5,6 +5,10 @@
 **[Read the writeup →](WRITEUP.md)** — seven results, five bugs that produced
 plausible numbers instead of errors, and what measuring them changed.
 
+**[Engineering notes →](docs/ENGINEERING.md)** — the invariants, the
+artifact contract between stages, and the measurements behind each design
+decision.
+
 An end-to-end machine learning pipeline over the [Yelp Open Dataset](https://www.yelp.com/dataset)
 (~7M reviews, 150,346 businesses, 11 metro areas): Spark ingestion and feature
 engineering, a supervised multi-label content classifier, and an unsupervised
